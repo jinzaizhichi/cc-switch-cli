@@ -2,7 +2,10 @@ use super::*;
 
 impl App {
     pub(super) fn handle_form_tab_key(&mut self, key: KeyEvent) -> bool {
-        if !matches!(key.code, KeyCode::Tab) {
+        let is_backtab = matches!(key.code, KeyCode::BackTab)
+            || (matches!(key.code, KeyCode::Tab) && key.modifiers.contains(KeyModifiers::SHIFT));
+        let is_tab = matches!(key.code, KeyCode::Tab) && !is_backtab;
+        if !is_tab && !is_backtab {
             return false;
         }
 
@@ -12,6 +15,9 @@ impl App {
 
         match form {
             FormState::ProviderAdd(provider) => {
+                if is_backtab {
+                    return false;
+                }
                 if matches!(provider.app_type, AppType::Codex) {
                     match (
                         &provider.mode,
@@ -62,30 +68,53 @@ impl App {
                         (FormMode::Edit { .. }, FormFocus::Templates, _) => {
                             provider.focus = FormFocus::Fields;
                         }
+                        (_, FormFocus::Content, _) => {
+                            provider.focus = FormFocus::Fields;
+                        }
                     }
                 } else {
                     provider.focus = match (&provider.mode, provider.focus) {
                         (FormMode::Add, FormFocus::Templates) => FormFocus::Fields,
                         (FormMode::Add, FormFocus::Fields) => FormFocus::JsonPreview,
                         (FormMode::Add, FormFocus::JsonPreview) => FormFocus::Templates,
+                        (FormMode::Add, FormFocus::Content) => FormFocus::Fields,
                         (FormMode::Edit { .. }, FormFocus::Fields) => FormFocus::JsonPreview,
                         (FormMode::Edit { .. }, FormFocus::JsonPreview) => FormFocus::Fields,
                         (FormMode::Edit { .. }, FormFocus::Templates) => FormFocus::Fields,
+                        (FormMode::Edit { .. }, FormFocus::Content) => FormFocus::Fields,
                     };
                 }
             }
             FormState::McpAdd(mcp) => {
+                if is_backtab {
+                    return false;
+                }
                 mcp.focus = match (&mcp.mode, mcp.focus) {
                     (FormMode::Add, FormFocus::Templates) => FormFocus::Fields,
                     (FormMode::Add, FormFocus::Fields) => FormFocus::JsonPreview,
                     (FormMode::Add, FormFocus::JsonPreview) => FormFocus::Templates,
+                    (FormMode::Add, FormFocus::Content) => FormFocus::Fields,
                     (FormMode::Edit { .. }, FormFocus::Fields) => FormFocus::JsonPreview,
                     (FormMode::Edit { .. }, FormFocus::JsonPreview) => FormFocus::Fields,
                     (FormMode::Edit { .. }, FormFocus::Templates) => FormFocus::Fields,
+                    (FormMode::Edit { .. }, FormFocus::Content) => FormFocus::Fields,
                 };
             }
             FormState::PromptMeta(prompt) => {
-                prompt.focus = FormFocus::Fields;
+                if is_backtab {
+                    prompt.editing = false;
+                    prompt.focus = FormFocus::Fields;
+                    return true;
+                }
+                if is_tab && matches!(prompt.focus, FormFocus::Content) {
+                    return false;
+                }
+                prompt.editing = false;
+                prompt.focus = match prompt.focus {
+                    FormFocus::Fields => FormFocus::Content,
+                    FormFocus::Content => FormFocus::Fields,
+                    FormFocus::Templates | FormFocus::JsonPreview => FormFocus::Fields,
+                };
             }
         }
 

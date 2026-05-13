@@ -1,9 +1,20 @@
 use crate::prompt::Prompt;
 
-use super::{FormFocus, FormMode, PromptMetaField, PromptMetaFormState, TextInput};
+use super::{
+    super::app::{EditorKind, EditorState, EditorSubmit},
+    FormFocus, FormMode, PromptMetaField, PromptMetaFormState, TextInput,
+};
+
+const DEFAULT_PROMPT_CONTENT: &str = "# Write your prompt here\n";
 
 impl PromptMetaFormState {
     pub fn new(id: String, name: String) -> Self {
+        let content = EditorState::new(
+            "Prompt content",
+            EditorKind::Plain,
+            EditorSubmit::PromptEdit { id: id.clone() },
+            DEFAULT_PROMPT_CONTENT,
+        );
         let mut form = Self {
             mode: FormMode::Add,
             focus: FormFocus::Fields,
@@ -12,6 +23,7 @@ impl PromptMetaFormState {
             id: TextInput::new(id),
             name: TextInput::new(name),
             description: TextInput::new(""),
+            content,
             initial_snapshot: Default::default(),
         };
         form.capture_initial_snapshot();
@@ -29,6 +41,14 @@ impl PromptMetaFormState {
             id: TextInput::new(prompt.id.clone()),
             name: TextInput::new(prompt.name.clone()),
             description: TextInput::new(prompt.description.clone().unwrap_or_default()),
+            content: EditorState::new(
+                "Prompt content",
+                EditorKind::Plain,
+                EditorSubmit::PromptEdit {
+                    id: prompt.id.clone(),
+                },
+                prompt.content.clone(),
+            ),
             initial_snapshot: Default::default(),
         };
         form.capture_initial_snapshot();
@@ -80,11 +100,16 @@ impl PromptMetaFormState {
         (!value.is_empty()).then(|| value.to_string())
     }
 
-    fn snapshot(&self) -> (String, String, String) {
+    pub fn content_value(&self) -> String {
+        self.content.text()
+    }
+
+    fn snapshot(&self) -> (String, String, String, String) {
         (
             self.id_value(),
             self.name_value(),
             self.description.value.trim().to_string(),
+            self.content.text(),
         )
     }
 }

@@ -94,6 +94,9 @@ fn prompt_rename_command_updates_prompt_name() {
     execute(
         PromptsCommand::Rename {
             id: "pr1".to_string(),
+            new_id: None,
+            named: None,
+            description: None,
             name: Some("New Name".to_string()),
         },
         Some(AppType::Claude),
@@ -139,7 +142,10 @@ fn prompt_create_command_uses_explicit_name() {
 
     execute(
         PromptsCommand::Create {
+            id: None,
+            named: None,
             name: Some("Prompt One".to_string()),
+            description: None,
         },
         Some(AppType::Claude),
     )
@@ -155,6 +161,102 @@ fn prompt_create_command_uses_explicit_name() {
         .expect("created prompt should exist");
     assert_eq!(prompt.name, "Prompt One");
     assert_eq!(prompt.content, "system prompt body");
+}
+
+#[test]
+#[serial]
+fn prompt_rename_command_can_update_id_without_prompting_for_name() {
+    let _guard = lock_test_mutex();
+    reset_test_fs();
+    ensure_test_home();
+
+    let mut config = MultiAppConfig::default();
+    config.prompts.claude.prompts = serde_json::from_value(json!({
+        "pr1": {
+            "id": "pr1",
+            "name": "Old Name",
+            "content": "hello",
+            "enabled": false,
+            "createdAt": 1,
+            "updatedAt": 1
+        }
+    }))
+    .expect("deserialize prompts");
+    let state = state_from_config(config);
+    state.save().expect("persist config");
+
+    execute(
+        PromptsCommand::Rename {
+            id: "pr1".to_string(),
+            new_id: Some("renamed".to_string()),
+            named: None,
+            description: None,
+            name: None,
+        },
+        Some(AppType::Claude),
+    )
+    .expect("rename command succeeds");
+
+    let persisted = cc_switch_lib::AppState::try_new().expect("reload state");
+    let prompts = PromptService::get_prompts(&persisted, AppType::Claude).expect("load prompts");
+    assert!(!prompts.contains_key("pr1"));
+    assert_eq!(
+        prompts.get("renamed").map(|prompt| prompt.name.as_str()),
+        Some("Old Name")
+    );
+}
+
+#[test]
+#[serial]
+fn prompt_create_command_accepts_custom_id_and_description() {
+    let _guard = lock_test_mutex();
+    reset_test_fs();
+    ensure_test_home();
+
+    let state = state_from_config(MultiAppConfig::default());
+    state.save().expect("persist config");
+
+    let editor_script = ensure_test_home().join("fake-editor.sh");
+    std::fs::write(
+        &editor_script,
+        "#!/bin/sh\nprintf 'custom body\\n' > \"$1\"\n",
+    )
+    .expect("write fake editor");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&editor_script)
+            .expect("read fake editor metadata")
+            .permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&editor_script, perms).expect("chmod fake editor");
+    }
+
+    std::env::set_var("EDITOR", &editor_script);
+    std::env::set_var("VISUAL", &editor_script);
+
+    execute(
+        PromptsCommand::Create {
+            id: Some("custom-id".to_string()),
+            named: Some("Custom Prompt".to_string()),
+            name: None,
+            description: Some("Custom description".to_string()),
+        },
+        Some(AppType::Claude),
+    )
+    .expect("create command succeeds");
+
+    std::env::remove_var("EDITOR");
+    std::env::remove_var("VISUAL");
+
+    let persisted = cc_switch_lib::AppState::try_new().expect("reload state");
+    let prompts = PromptService::get_prompts(&persisted, AppType::Claude).expect("load prompts");
+    let prompt = prompts
+        .get("custom-id")
+        .expect("created prompt should exist");
+    assert_eq!(prompt.name, "Custom Prompt");
+    assert_eq!(prompt.description.as_deref(), Some("Custom description"));
+    assert_eq!(prompt.content, "custom body");
 }
 
 #[test]

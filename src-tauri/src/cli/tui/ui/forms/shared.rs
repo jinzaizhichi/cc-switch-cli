@@ -63,6 +63,7 @@ pub(crate) fn add_form_key_items(
                 ("↑↓", texts::tui_key_scroll()),
             ]);
         }
+        FormFocus::Content => {}
     }
 
     keys

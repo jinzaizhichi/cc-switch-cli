@@ -310,6 +310,7 @@ fn mcp_add_form_key_items(
         FormFocus::JsonPreview => {
             keys.push(("↑↓", texts::tui_key_scroll()));
         }
+        FormFocus::Content => {}
     }
 
     keys

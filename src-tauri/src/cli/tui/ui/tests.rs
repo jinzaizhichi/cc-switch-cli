@@ -26,7 +26,7 @@ use crate::{
             ConfigSnapshot, McpSnapshot, OpenClawWorkspaceSnapshot, PromptsSnapshot, ProviderRow,
             ProvidersSnapshot, ProxySnapshot, SkillsSnapshot, UiData,
         },
-        form::{FormFocus, ProviderAddField, TextInput},
+        form::{FormFocus, FormState, PromptMetaFormState, ProviderAddField, TextInput},
         route::{NavItem, Route},
         theme::theme_for,
     },
@@ -1412,6 +1412,28 @@ fn editor_key_bar_shows_ctrl_o_external_editor_hint() {
 
     let has_ctrl_o = (0..buf.area.height).any(|y| line_at(&buf, y).contains("Ctrl+O"));
     assert!(has_ctrl_o, "editor key bar should show the Ctrl+O hint");
+}
+
+#[test]
+fn prompt_form_content_key_bar_shows_ctrl_o_external_editor_hint() {
+    let _lock = lock_env();
+    let _no_color = EnvGuard::remove("NO_COLOR");
+
+    let mut app = App::new(Some(AppType::Claude));
+    app.route = Route::Prompts;
+    app.focus = Focus::Content;
+    let mut form = PromptMetaFormState::new("prompt-one".to_string(), "Prompt One".to_string());
+    form.focus = FormFocus::Content;
+    app.form = Some(FormState::PromptMeta(form));
+
+    let data = minimal_data(&app.app_type);
+    let buf = render(&app, &data);
+
+    let has_ctrl_o = (0..buf.area.height).any(|y| line_at(&buf, y).contains("Ctrl+O"));
+    assert!(
+        has_ctrl_o,
+        "prompt content editor key bar should show the Ctrl+O hint"
+    );
 }
 
 #[test]

@@ -3,7 +3,6 @@ use super::*;
 impl App {
     pub(crate) fn on_editor_key(&mut self, key: KeyEvent) -> Action {
         let viewport = self.editor_viewport_size();
-        let jump_rows = viewport.height as usize;
 
         let Some(editor) = &mut self.editor else {
             return Action::None;
@@ -20,9 +19,7 @@ impl App {
             return Action::EditorOpenExternal;
         }
 
-        if let Some(command) = TextEditCommand::from_key(key) {
-            editor.apply_text_command(command);
-            editor.ensure_cursor_visible(viewport);
+        if editor.apply_editor_key(key, viewport) {
             return Action::None;
         }
 
@@ -39,54 +36,6 @@ impl App {
                     self.editor = None;
                     Action::None
                 }
-            }
-            KeyCode::Up => {
-                editor.cursor_row = editor.cursor_row.saturating_sub(1);
-                editor.cursor_col = editor
-                    .cursor_col
-                    .min(editor.line_len_chars(editor.cursor_row));
-                editor.ensure_cursor_visible(viewport);
-                Action::None
-            }
-            KeyCode::Down => {
-                if !editor.lines.is_empty() {
-                    editor.cursor_row = (editor.cursor_row + 1).min(editor.lines.len() - 1);
-                }
-                editor.cursor_col = editor
-                    .cursor_col
-                    .min(editor.line_len_chars(editor.cursor_row));
-                editor.ensure_cursor_visible(viewport);
-                Action::None
-            }
-            KeyCode::PageUp => {
-                editor.scroll = editor.scroll.saturating_sub(jump_rows);
-                editor.cursor_row = editor.cursor_row.saturating_sub(jump_rows);
-                editor.cursor_col = editor
-                    .cursor_col
-                    .min(editor.line_len_chars(editor.cursor_row));
-                editor.ensure_cursor_visible(viewport);
-                Action::None
-            }
-            KeyCode::PageDown => {
-                if !editor.lines.is_empty() {
-                    editor.scroll = (editor.scroll + jump_rows).min(editor.lines.len() - 1);
-                    editor.cursor_row = (editor.cursor_row + jump_rows).min(editor.lines.len() - 1);
-                    editor.cursor_col = editor
-                        .cursor_col
-                        .min(editor.line_len_chars(editor.cursor_row));
-                }
-                editor.ensure_cursor_visible(viewport);
-                Action::None
-            }
-            KeyCode::Enter => {
-                editor.newline();
-                editor.ensure_cursor_visible(viewport);
-                Action::None
-            }
-            KeyCode::Tab => {
-                editor.insert_str("  ");
-                editor.ensure_cursor_visible(viewport);
-                Action::None
             }
             _ => Action::None,
         }

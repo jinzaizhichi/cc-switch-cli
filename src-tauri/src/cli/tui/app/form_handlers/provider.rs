@@ -46,7 +46,7 @@ impl App {
         match provider.focus {
             FormFocus::Fields => self.handle_provider_fields_key(key, data),
             FormFocus::JsonPreview => self.handle_provider_json_preview_key(key, data),
-            FormFocus::Templates => None,
+            FormFocus::Templates | FormFocus::Content => None,
         }
     }
 

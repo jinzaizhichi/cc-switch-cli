@@ -1,6 +1,8 @@
 use crate::app_config::{AppType, McpApps};
 use serde_json::Value;
 
+use super::app::EditorState;
+
 mod codex_config;
 mod mcp;
 mod prompt;
@@ -117,6 +119,7 @@ pub enum FormFocus {
     Templates,
     Fields,
     JsonPreview,
+    Content,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -304,7 +307,8 @@ pub struct PromptMetaFormState {
     pub id: TextInput,
     pub name: TextInput,
     pub description: TextInput,
-    initial_snapshot: (String, String, String),
+    pub content: EditorState,
+    initial_snapshot: (String, String, String, String),
 }
 
 #[derive(Debug, Clone)]

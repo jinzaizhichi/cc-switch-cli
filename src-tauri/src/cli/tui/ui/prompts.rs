@@ -71,7 +71,6 @@ pub(super) fn render_prompts(
                 ("Enter", texts::tui_key_view()),
                 ("e", texts::tui_key_edit()),
                 ("x", texts::tui_key_deactivate_active()),
-                ("n", texts::tui_key_rename()),
                 ("d", texts::tui_key_delete()),
             ],
         );

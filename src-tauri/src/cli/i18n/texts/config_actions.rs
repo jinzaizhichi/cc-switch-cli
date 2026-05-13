@@ -810,9 +810,9 @@ pub fn tui_prompt_title(name: &str) -> String {
 
 pub fn tui_prompt_rename_title() -> &'static str {
     if is_chinese() {
-        "重命名提示词"
+        "编辑提示词"
     } else {
-        "Rename Prompt"
+        "Edit Prompt"
     }
 }
 

@@ -397,18 +397,6 @@ impl App {
                 let Some(row) = visible.get(self.prompt_idx) else {
                     return Action::None;
                 };
-                self.open_editor(
-                    texts::tui_prompt_title(&row.prompt.name),
-                    EditorKind::Plain,
-                    row.prompt.content.clone(),
-                    EditorSubmit::PromptEdit { id: row.id.clone() },
-                );
-                Action::None
-            }
-            KeyCode::Char('n') => {
-                let Some(row) = visible.get(self.prompt_idx) else {
-                    return Action::None;
-                };
                 self.filter.active = false;
                 self.editor = None;
                 self.overlay = Overlay::None;

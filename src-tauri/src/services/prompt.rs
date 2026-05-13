@@ -82,7 +82,6 @@ impl PromptService {
         _id: &str,
         prompt: Prompt,
     ) -> Result<(), AppError> {
-        Self::validate_prompt_id(&prompt.id)?;
         let is_enabled = prompt.enabled;
 
         state.db.save_prompt(app.as_str(), &prompt)?;
@@ -130,6 +129,18 @@ impl PromptService {
         name: &str,
         description: Option<String>,
     ) -> Result<Prompt, AppError> {
+        Self::update_prompt(state, app, old_id, new_id, name, description, None)
+    }
+
+    pub fn update_prompt(
+        state: &AppState,
+        app: AppType,
+        old_id: &str,
+        new_id: &str,
+        name: &str,
+        description: Option<String>,
+        content: Option<String>,
+    ) -> Result<Prompt, AppError> {
         let new_id = new_id.trim();
         Self::validate_prompt_id(new_id)?;
 
@@ -155,6 +166,9 @@ impl PromptService {
             let trimmed = value.trim();
             (!trimmed.is_empty()).then(|| trimmed.to_string())
         });
+        if let Some(content) = content {
+            prompt.content = content.trim_end().to_string();
+        }
         prompt.updated_at = Some(get_unix_timestamp()?);
         state.db.save_prompt(app.as_str(), &prompt)?;
         if old_prompt_id != prompt.id {

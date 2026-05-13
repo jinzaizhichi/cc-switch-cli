@@ -28,7 +28,7 @@ pub(crate) use helpers::{app_display_name, queue_managed_proxy_action};
 #[cfg(test)]
 pub(crate) use helpers::{
     import_mcp_for_current_app_with, open_proxy_help_overlay_with,
-    run_external_editor_for_current_editor,
+    run_external_editor_for_current_editor, run_external_editor_for_prompt_form_content,
 };
 
 fn normalize_route_for_app(app_type: &AppType, route: &super::route::Route) -> super::route::Route {
@@ -244,7 +244,15 @@ pub(crate) fn handle_action(
             name,
             description,
         } => prompts::update_metadata(&mut ctx, old_id, new_id, name, description),
+        Action::PromptSave {
+            old_id,
+            new_id,
+            name,
+            description,
+            content,
+        } => prompts::save(&mut ctx, old_id, new_id, name, description, content),
         Action::PromptDelete { id } => prompts::delete(&mut ctx, id),
+        Action::PromptFormOpenExternal => prompts::open_form_external(&mut ctx),
         Action::ConfigExport { path } => config::export(&mut ctx, path),
         Action::ConfigShowFull => config::show_full(&mut ctx),
         Action::ConfigImport { path } => config::import(&mut ctx, path),

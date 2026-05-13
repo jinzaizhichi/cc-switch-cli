@@ -467,12 +467,14 @@ fn rename_prompt(
         )));
     };
 
+    let should_prompt_name = name.is_none() && new_id.is_none() && description.is_none();
     let new_name = match name {
         Some(name) => name,
-        None => inquire::Text::new("New prompt name:")
+        None if should_prompt_name => inquire::Text::new("New prompt name:")
             .with_initial_value(&prompt.name)
             .prompt()
             .map_err(|e| AppError::Message(format!("Prompt failed: {}", e)))?,
+        None => prompt.name.clone(),
     };
 
     let trimmed = new_name.trim();

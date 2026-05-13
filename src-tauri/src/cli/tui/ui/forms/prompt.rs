@@ -32,12 +32,12 @@ pub(crate) fn render_prompt_meta_form(
         frame,
         chunks[0],
         theme,
-        &prompt_meta_form_key_items(prompt.editing, selected),
+        &prompt_meta_form_key_items(prompt.editing, prompt.focus, selected),
     );
 
     let body = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(58), Constraint::Percentage(42)])
+        .constraints([Constraint::Length(36), Constraint::Min(30)])
         .split(chunks[1]);
 
     let fields_block = Block::default()
@@ -122,25 +122,54 @@ pub(crate) fn render_prompt_meta_form(
         }
     }
 
-    let preview = vec![
-        Line::raw(format!("{}: {}", texts::tui_label_id(), prompt.id_value())),
-        Line::raw(format!("{}: {}", texts::header_name(), prompt.name_value())),
-        Line::raw(format!(
-            "{}: {}",
-            texts::header_description(),
-            prompt.description_value().unwrap_or_default()
-        )),
-    ];
-    let preview_block = Block::default()
+    render_prompt_content_editor(frame, prompt, body[1], theme);
+}
+
+fn render_prompt_content_editor(
+    frame: &mut Frame<'_>,
+    prompt: &super::form::PromptMetaFormState,
+    area: Rect,
+    theme: &super::theme::Theme,
+) {
+    let active = matches!(prompt.focus, FormFocus::Content);
+    let content_block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Plain)
-        .border_style(focus_block_style(false, theme))
-        .title(texts::tui_label_prompt_metadata());
-    frame.render_widget(preview_block.clone(), body[1]);
-    frame.render_widget(
-        Paragraph::new(preview).wrap(Wrap { trim: false }),
-        preview_block.inner(body[1]),
-    );
+        .border_style(focus_block_style(active, theme))
+        .title(texts::tui_editor_text_field_title());
+    frame.render_widget(content_block.clone(), area);
+    let content_inner = content_block.inner(area);
+
+    let height = content_inner.height as usize;
+    let width = content_inner.width.max(1);
+
+    let mut shown = Vec::new();
+    let start = prompt
+        .content
+        .scroll
+        .min(prompt.content.lines.len().saturating_sub(1));
+    for line in prompt.content.lines.iter().skip(start) {
+        for segment in super::app::EditorState::wrap_line_segments(line, width) {
+            if shown.len() >= height {
+                break;
+            }
+            shown.push(Line::raw(segment));
+        }
+        if shown.len() >= height {
+            break;
+        }
+    }
+
+    frame.render_widget(Paragraph::new(shown), content_inner);
+
+    if active {
+        let (row_in_view, col_in_view) = prompt.content.cursor_visual_offset_from_scroll(width);
+        if row_in_view < height {
+            let x = content_inner.x + col_in_view.min(content_inner.width.saturating_sub(1));
+            let y = content_inner.y + row_in_view as u16;
+            frame.set_cursor_position((x, y));
+        }
+    }
 }
 
 fn prompt_meta_field_label_and_value(
@@ -165,24 +194,43 @@ fn prompt_meta_field_label_and_value(
 
 fn prompt_meta_form_key_items(
     editing: bool,
+    focus: FormFocus,
     _selected_field: Option<PromptMetaField>,
 ) -> Vec<(&'static str, &'static str)> {
-    let mut keys = vec![
-        ("Tab", texts::tui_key_focus()),
-        ("Ctrl+S", texts::tui_key_save()),
-        ("Esc", texts::tui_key_close()),
-    ];
+    let mut keys = Vec::new();
 
-    if editing {
-        keys.extend([
-            ("←→", texts::tui_key_move()),
-            ("Enter", texts::tui_key_exit_edit()),
-        ]);
-    } else {
-        keys.extend([
-            ("↑↓", texts::tui_key_select()),
-            ("Enter", texts::tui_key_edit_mode()),
-        ]);
+    match focus {
+        FormFocus::Content => {
+            keys.extend([
+                ("Shift+Tab", texts::tui_key_focus()),
+                ("↑↓←→", texts::tui_key_move()),
+                ("Ctrl+O", texts::tui_key_external_editor()),
+                ("Ctrl+S", texts::tui_key_save()),
+                ("Esc", texts::tui_key_close()),
+            ]);
+        }
+        FormFocus::Fields if editing => {
+            keys.extend([
+                ("Tab", texts::tui_key_focus()),
+                ("Ctrl+S", texts::tui_key_save()),
+                ("Esc", texts::tui_key_close()),
+            ]);
+            keys.extend([
+                ("←→", texts::tui_key_move()),
+                ("Enter", texts::tui_key_exit_edit()),
+            ]);
+        }
+        _ => {
+            keys.extend([
+                ("Tab", texts::tui_key_focus()),
+                ("Ctrl+S", texts::tui_key_save()),
+                ("Esc", texts::tui_key_close()),
+            ]);
+            keys.extend([
+                ("↑↓", texts::tui_key_select()),
+                ("Enter", texts::tui_key_edit_mode()),
+            ]);
+        }
     }
 
     keys

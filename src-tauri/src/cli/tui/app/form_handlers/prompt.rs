@@ -8,6 +8,7 @@ impl App {
 
         match prompt.focus {
             FormFocus::Fields => self.handle_prompt_meta_fields_key(key),
+            FormFocus::Content => self.handle_prompt_content_key(key),
             FormFocus::Templates | FormFocus::JsonPreview => None,
         }
     }
@@ -30,27 +31,58 @@ impl App {
             return Action::None;
         }
 
-        match &prompt.mode {
-            FormMode::Add => {
-                self.open_editor(
-                    texts::tui_prompt_title(&name),
-                    EditorKind::Plain,
-                    "# Write your prompt here\n",
-                    EditorSubmit::PromptCreate {
-                        id,
-                        name,
-                        description,
-                    },
-                );
-                Action::None
-            }
-            FormMode::Edit { id: old_id } => Action::PromptUpdateMetadata {
-                old_id: old_id.clone(),
-                new_id: id,
-                name,
-                description,
+        Action::PromptSave {
+            old_id: match &prompt.mode {
+                FormMode::Add => None,
+                FormMode::Edit { id } => Some(id.clone()),
             },
+            new_id: id,
+            name,
+            description,
+            content: prompt.content_value(),
         }
+    }
+
+    fn handle_prompt_content_key(&mut self, key: KeyEvent) -> Option<Action> {
+        if matches!(key.code, KeyCode::Esc) {
+            return None;
+        }
+        if is_open_external_editor_shortcut(key) {
+            return Some(Action::PromptFormOpenExternal);
+        }
+
+        let viewport = self.prompt_content_viewport_size();
+        let Some(FormState::PromptMeta(prompt)) = self.form.as_mut() else {
+            return None;
+        };
+
+        if prompt.content.apply_editor_key(key, viewport) {
+            return Some(Action::None);
+        }
+        None
+    }
+
+    fn prompt_content_viewport_size(&self) -> Size {
+        // Approximate the one-page prompt form layout: app content minus form chrome, key bar,
+        // metadata pane, and content pane borders.
+        let width = self
+            .last_size
+            .width
+            .saturating_sub(30)
+            .saturating_sub(36)
+            .saturating_sub(6)
+            .max(1);
+        let height = self
+            .last_size
+            .height
+            .saturating_sub(3)
+            .saturating_sub(1)
+            .saturating_sub(2)
+            .saturating_sub(1)
+            .saturating_sub(2)
+            .max(1);
+
+        Size { width, height }
     }
 
     fn handle_prompt_meta_fields_key(&mut self, key: KeyEvent) -> Option<Action> {

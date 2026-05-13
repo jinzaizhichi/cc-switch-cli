@@ -116,9 +116,17 @@ pub enum Action {
         name: String,
         description: Option<String>,
     },
+    PromptSave {
+        old_id: Option<String>,
+        new_id: String,
+        name: String,
+        description: Option<String>,
+        content: String,
+    },
     PromptDelete {
         id: String,
     },
+    PromptFormOpenExternal,
 
     ConfigExport {
         path: String,

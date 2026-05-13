@@ -37,7 +37,7 @@ impl App {
         match mcp.focus {
             FormFocus::Fields => self.handle_mcp_fields_key(key),
             FormFocus::JsonPreview => self.handle_mcp_json_preview_key(key),
-            FormFocus::Templates => None,
+            FormFocus::Templates | FormFocus::Content => None,
         }
     }
 

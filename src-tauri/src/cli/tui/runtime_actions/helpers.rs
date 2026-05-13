@@ -7,9 +7,12 @@ use crate::commands::workspace;
 use crate::error::AppError;
 use crate::services::McpService;
 
+use ratatui::prelude::Size;
+
 use super::super::app::visible_prompts;
 use super::super::app::{App, LoadingKind, Overlay, TextViewState, ToastKind};
 use super::super::data::{load_proxy_config, load_state, UiData};
+use super::super::form::{FormFocus, FormState};
 use super::super::runtime_systems::{ProxyReq, RequestTracker};
 
 pub(crate) fn import_mcp_for_current_app_with<FImport, FLoad>(
@@ -147,6 +150,31 @@ pub(crate) fn run_external_editor_for_current_editor(
     let edited_text = open_external_editor(&current_text)?;
     if let Some(editor) = app.editor.as_mut() {
         editor.replace_text(edited_text);
+    }
+
+    Ok(())
+}
+
+pub(crate) fn run_external_editor_for_prompt_form_content(
+    app: &mut App,
+    open_external_editor: impl FnOnce(&str) -> Result<String, AppError>,
+) -> Result<(), AppError> {
+    let Some(current_text) = app.form.as_ref().and_then(|form| match form {
+        FormState::PromptMeta(prompt) if matches!(prompt.focus, FormFocus::Content) => {
+            Some(prompt.content.text())
+        }
+        _ => None,
+    }) else {
+        return Ok(());
+    };
+
+    let edited_text = open_external_editor(&current_text)?;
+    if let Some(FormState::PromptMeta(prompt)) = app.form.as_mut() {
+        prompt.content.replace_text(edited_text);
+        prompt.content.ensure_cursor_visible(Size {
+            width: 1,
+            height: 1,
+        });
     }
 
     Ok(())
