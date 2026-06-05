@@ -13896,7 +13896,7 @@ mod tests {
     }
 
     #[test]
-    fn usage_shortcuts_change_range_metric_and_pane() {
+    fn usage_shortcuts_change_range_and_open_details() {
         let mut app = App::new(Some(AppType::Claude));
         app.route = Route::Usage;
         app.focus = Focus::Content;
@@ -13918,11 +13918,11 @@ mod tests {
         assert!(matches!(app.usage.pane, UsagePane::Models));
 
         app.on_key(key(KeyCode::Right), &data);
-        assert!(matches!(app.usage.pane, UsagePane::Recent));
+        assert!(matches!(app.usage.pane, UsagePane::Models));
     }
 
     #[test]
-    fn usage_logs_shortcut_and_detail_route_use_stack() {
+    fn usage_details_tabs_and_log_detail_route_use_stack() {
         let mut app = App::new(Some(AppType::Claude));
         app.route = Route::Usage;
         app.focus = Focus::Content;
@@ -13936,6 +13936,24 @@ mod tests {
         assert!(matches!(action, Action::SwitchRoute(Route::UsageLogs)));
         assert!(matches!(app.route, Route::UsageLogs));
         assert_eq!(app.route_stack, vec![Route::Usage]);
+        assert!(matches!(app.usage.pane, UsagePane::Models));
+
+        let action = app.on_key(key(KeyCode::Enter), &data);
+        assert!(matches!(action, Action::None));
+
+        app.on_key(key(KeyCode::Tab), &data);
+        assert!(matches!(app.usage.pane, UsagePane::Providers));
+
+        app.on_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::SHIFT), &data);
+        assert!(matches!(app.usage.pane, UsagePane::Models));
+
+        app.on_key(key(KeyCode::Tab), &data);
+        app.on_key(key(KeyCode::Tab), &data);
+        assert!(matches!(app.usage.pane, UsagePane::Recent));
+
+        let action = app.on_key(key(KeyCode::Char('d')), &data);
+        assert!(matches!(action, Action::None));
+        assert!(matches!(app.route, Route::UsageLogs));
 
         let action = app.on_key(key(KeyCode::Enter), &data);
         assert!(matches!(

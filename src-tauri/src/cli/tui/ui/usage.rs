@@ -40,8 +40,7 @@ pub(super) fn render_usage(
                 ("2", usage_text("7 days", "7天")),
                 ("3", usage_text("30 days", "30天")),
                 ("m", usage_text("metric", "指标")),
-                ("Tab/←→", texts::tui_key_pane()),
-                ("L", usage_text("logs", "日志")),
+                ("L", usage_text("details", "详情")),
                 ("r", texts::tui_key_refresh()),
             ],
         );
@@ -50,21 +49,7 @@ pub(super) fn render_usage(
     render_summary_bar(frame, chunks[1], theme, usage_summary_line(app, data));
     render_usage_metrics(frame, app, data, chunks[2], theme);
 
-    let narrow = chunks[3].width < 110;
-    let body = Layout::default()
-        .direction(if narrow {
-            Direction::Vertical
-        } else {
-            Direction::Horizontal
-        })
-        .constraints(if narrow {
-            [Constraint::Percentage(55), Constraint::Percentage(45)]
-        } else {
-            [Constraint::Percentage(58), Constraint::Percentage(42)]
-        })
-        .split(chunks[3]);
-    render_usage_trend(frame, app, data, body[0], theme);
-    render_usage_focus_table(frame, app, data, body[1], theme);
+    render_usage_trend(frame, app, data, chunks[3], theme);
 }
 
 pub(super) fn render_usage_logs(
@@ -78,12 +63,13 @@ pub(super) fn render_usage_logs(
         .borders(Borders::ALL)
         .border_type(BorderType::Plain)
         .border_style(pane_border_style(app, Focus::Content, theme))
-        .title(usage_text("Usage Logs", "用量日志"));
+        .title(usage_text("Usage Details", "用量详情"));
     frame.render_widget(outer.clone(), area);
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
+            Constraint::Length(1),
             Constraint::Length(1),
             Constraint::Length(3),
             Constraint::Min(0),
@@ -96,16 +82,23 @@ pub(super) fn render_usage_logs(
             chunks[0],
             theme,
             &[
+                ("Tab", texts::tui_key_pane()),
                 ("↑↓/Pg", texts::tui_key_select()),
-                ("Enter/d", texts::tui_key_details()),
+                ("Enter", texts::tui_key_details()),
                 ("r", texts::tui_key_refresh()),
                 ("Esc", texts::tui_key_close()),
             ],
         );
     }
 
-    render_summary_bar(frame, chunks[1], theme, usage_logs_summary_line(data));
-    render_usage_logs_table(frame, app, data, chunks[2], theme);
+    render_usage_detail_tabs(frame, app, chunks[1], theme);
+    render_summary_bar(
+        frame,
+        chunks[2],
+        theme,
+        usage_detail_summary_line(app, data),
+    );
+    render_usage_detail_table(frame, app, data, chunks[3], theme);
 }
 
 pub(super) fn render_usage_log_detail(
@@ -636,51 +629,81 @@ fn render_usage_sparkline(
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
 }
 
-fn render_usage_focus_table(
+fn render_usage_detail_tabs(
+    frame: &mut Frame<'_>,
+    app: &App,
+    area: Rect,
+    theme: &super::theme::Theme,
+) {
+    let items = [
+        (UsagePane::Models, usage_text("Model Stats", "模型统计")),
+        (
+            UsagePane::Providers,
+            usage_text("Provider Stats", "Provider 统计"),
+        ),
+        (UsagePane::Recent, usage_text("Request Logs", "请求日志")),
+    ];
+    let mut spans = Vec::new();
+    for (idx, (pane, label)) in items.into_iter().enumerate() {
+        if idx > 0 {
+            spans.push(Span::raw(" "));
+        }
+        let style = if app.usage.pane == pane {
+            Style::default()
+                .fg(Color::Black)
+                .bg(theme.accent)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme.dim)
+        };
+        spans.push(Span::styled(format!(" {label} "), style));
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+fn render_usage_detail_table(
     frame: &mut Frame<'_>,
     app: &App,
     data: &UiData,
     area: Rect,
     theme: &super::theme::Theme,
 ) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Plain)
+        .border_style(Style::default().fg(theme.accent))
+        .title(format!(" {} ", usage_detail_pane_title(app.usage.pane)));
+    frame.render_widget(block.clone(), area);
+    let inner = inset_left(block.inner(area), CONTENT_INSET_LEFT);
+
     match app.usage.pane {
-        UsagePane::Providers => render_top_providers_table(
-            frame,
-            app,
-            data.usage.top_providers_for(app.usage.range),
-            area,
-            theme,
-        ),
-        UsagePane::Models => render_top_models_table(
+        UsagePane::Models => render_usage_models_table(
             frame,
             app,
             data.usage.top_models_for(app.usage.range),
-            area,
+            inner,
             theme,
         ),
-        UsagePane::Recent => {
-            render_recent_usage_table(frame, app, &data.usage.recent_logs, area, theme)
-        }
+        UsagePane::Providers => render_usage_providers_table(
+            frame,
+            app,
+            data.usage.top_providers_for(app.usage.range),
+            inner,
+            theme,
+        ),
+        UsagePane::Recent => render_usage_logs_table(frame, app, data, inner, theme),
     }
 }
 
-fn render_top_providers_table(
+fn render_usage_providers_table(
     frame: &mut Frame<'_>,
     app: &App,
     rows: &[UsageProviderStatsRow],
     area: Rect,
     theme: &super::theme::Theme,
 ) {
-    let block = usage_focus_block(
-        app,
-        UsagePane::Providers,
-        usage_text("Top Providers", "供应商排行"),
-        theme,
-    );
-    frame.render_widget(block.clone(), area);
-    let inner = block.inner(area);
     if rows.is_empty() {
-        render_empty_table(frame, inner, theme);
+        render_empty_table(frame, area, theme);
         return;
     }
 
@@ -721,29 +744,19 @@ fn render_top_providers_table(
     .row_highlight_style(selection_style(theme))
     .highlight_symbol(highlight_symbol(theme));
     let mut state = TableState::default();
-    if matches!(app.usage.pane, UsagePane::Providers) {
-        state.select(Some(app.usage.selected_idx));
-    }
-    frame.render_stateful_widget(table, inset_left(inner, CONTENT_INSET_LEFT), &mut state);
+    state.select(Some(app.usage.selected_idx));
+    frame.render_stateful_widget(table, area, &mut state);
 }
 
-fn render_top_models_table(
+fn render_usage_models_table(
     frame: &mut Frame<'_>,
     app: &App,
     rows: &[UsageModelStatsRow],
     area: Rect,
     theme: &super::theme::Theme,
 ) {
-    let block = usage_focus_block(
-        app,
-        UsagePane::Models,
-        usage_text("Top Models", "模型排行"),
-        theme,
-    );
-    frame.render_widget(block.clone(), area);
-    let inner = block.inner(area);
     if rows.is_empty() {
-        render_empty_table(frame, inner, theme);
+        render_empty_table(frame, area, theme);
         return;
     }
 
@@ -781,65 +794,8 @@ fn render_top_models_table(
     .row_highlight_style(selection_style(theme))
     .highlight_symbol(highlight_symbol(theme));
     let mut state = TableState::default();
-    if matches!(app.usage.pane, UsagePane::Models) {
-        state.select(Some(app.usage.selected_idx));
-    }
-    frame.render_stateful_widget(table, inset_left(inner, CONTENT_INSET_LEFT), &mut state);
-}
-
-fn render_recent_usage_table(
-    frame: &mut Frame<'_>,
-    app: &App,
-    rows: &[UsageLogRow],
-    area: Rect,
-    theme: &super::theme::Theme,
-) {
-    let block = usage_focus_block(
-        app,
-        UsagePane::Recent,
-        usage_text("Recent Logs", "最近日志"),
-        theme,
-    );
-    frame.render_widget(block.clone(), area);
-    let inner = block.inner(area);
-    if rows.is_empty() {
-        render_empty_table(frame, inner, theme);
-        return;
-    }
-
-    let header = Row::new(vec![
-        Cell::from(usage_text("Time", "时间")),
-        Cell::from(usage_text("Model", "模型")),
-        Cell::from(usage_text("Status", "状态")),
-        Cell::from(usage_text("Cost", "费用")),
-    ])
-    .style(Style::default().fg(theme.dim).add_modifier(Modifier::BOLD));
-    let table_rows = rows.iter().take(8).map(|row| {
-        Row::new(vec![
-            Cell::from(format_log_time(row.created_at, false)),
-            Cell::from(row.model.clone()),
-            Cell::from(status_label(row.status_code)),
-            Cell::from(format_money(row.total_cost_usd)),
-        ])
-        .style(status_style(row, theme))
-    });
-    let table = Table::new(
-        table_rows,
-        [
-            Constraint::Length(11),
-            Constraint::Percentage(48),
-            Constraint::Length(8),
-            Constraint::Length(10),
-        ],
-    )
-    .header(header)
-    .row_highlight_style(selection_style(theme))
-    .highlight_symbol(highlight_symbol(theme));
-    let mut state = TableState::default();
-    if matches!(app.usage.pane, UsagePane::Recent) {
-        state.select(Some(app.usage.selected_idx));
-    }
-    frame.render_stateful_widget(table, inset_left(inner, CONTENT_INSET_LEFT), &mut state);
+    state.select(Some(app.usage.selected_idx));
+    frame.render_stateful_widget(table, area, &mut state);
 }
 
 fn render_usage_logs_table(
@@ -850,14 +806,7 @@ fn render_usage_logs_table(
     theme: &super::theme::Theme,
 ) {
     if data.usage.recent_logs.is_empty() {
-        render_centered_usage_lines(
-            frame,
-            area,
-            vec![Line::styled(
-                usage_text("No usage logs found", "暂无用量日志"),
-                Style::default().fg(theme.comment),
-            )],
-        );
+        render_empty_table(frame, area, theme);
         return;
     }
 
@@ -892,7 +841,7 @@ fn render_usage_logs_table(
         .highlight_symbol(highlight_symbol(theme));
         let mut state = TableState::default();
         state.select(Some(app.usage.logs_idx));
-        frame.render_stateful_widget(table, inset_left(area, CONTENT_INSET_LEFT), &mut state);
+        frame.render_stateful_widget(table, area, &mut state);
         return;
     }
 
@@ -938,7 +887,7 @@ fn render_usage_logs_table(
     .highlight_symbol(highlight_symbol(theme));
     let mut state = TableState::default();
     state.select(Some(app.usage.logs_idx));
-    frame.render_stateful_widget(table, inset_left(area, CONTENT_INSET_LEFT), &mut state);
+    frame.render_stateful_widget(table, area, &mut state);
 }
 
 fn render_usage_detail_body(
@@ -1054,27 +1003,12 @@ fn render_usage_detail_body(
     );
 }
 
-fn usage_focus_block(
-    app: &App,
-    pane: UsagePane,
-    title: &'static str,
-    theme: &super::theme::Theme,
-) -> Block<'static> {
-    let style = if app.usage.pane == pane {
-        Style::default().fg(theme.accent)
-    } else {
-        Style::default().fg(theme.dim)
-    };
-    Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Plain)
-        .border_style(style)
-        .title(match pane {
-            UsagePane::Providers | UsagePane::Models => {
-                format!(" {title} · {} ", app.usage.range.label())
-            }
-            UsagePane::Recent => format!(" {title} "),
-        })
+fn usage_detail_pane_title(pane: UsagePane) -> &'static str {
+    match pane {
+        UsagePane::Models => usage_text("Model Stats", "模型统计"),
+        UsagePane::Providers => usage_text("Provider Stats", "Provider 统计"),
+        UsagePane::Recent => usage_text("Request Logs", "请求日志"),
+    }
 }
 
 fn render_empty_table(frame: &mut Frame<'_>, area: Rect, theme: &super::theme::Theme) {
@@ -1133,19 +1067,43 @@ fn usage_summary_line(app: &App, data: &UiData) -> String {
     }
 }
 
-fn usage_logs_summary_line(data: &UiData) -> String {
-    if i18n::is_chinese() {
-        format!(
-            "显示最近 {} 条 · 共 {} 条",
-            data.usage.recent_logs.len(),
-            data.usage.logs_total
-        )
-    } else {
-        format!(
-            "Latest {} rows shown · {} total rows",
-            data.usage.recent_logs.len(),
-            data.usage.logs_total
-        )
+fn usage_detail_summary_line(app: &App, data: &UiData) -> String {
+    match app.usage.pane {
+        UsagePane::Models => {
+            let count = data.usage.top_models_for(app.usage.range).len();
+            if i18n::is_chinese() {
+                format!("{} · 模型统计 · {} 条", app.usage.range.label(), count)
+            } else {
+                format!("{} · model stats · {} rows", app.usage.range.label(), count)
+            }
+        }
+        UsagePane::Providers => {
+            let count = data.usage.top_providers_for(app.usage.range).len();
+            if i18n::is_chinese() {
+                format!("{} · Provider 统计 · {} 条", app.usage.range.label(), count)
+            } else {
+                format!(
+                    "{} · provider stats · {} rows",
+                    app.usage.range.label(),
+                    count
+                )
+            }
+        }
+        UsagePane::Recent => {
+            if i18n::is_chinese() {
+                format!(
+                    "请求日志 · 显示最近 {} 条 · 共 {} 条",
+                    data.usage.recent_logs.len(),
+                    data.usage.logs_total
+                )
+            } else {
+                format!(
+                    "request logs · latest {} rows shown · {} total rows",
+                    data.usage.recent_logs.len(),
+                    data.usage.logs_total
+                )
+            }
+        }
     }
 }
 

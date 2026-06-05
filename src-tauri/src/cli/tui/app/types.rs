@@ -45,8 +45,8 @@ pub enum SessionsPane {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UsagePane {
-    Providers,
     Models,
+    Providers,
     Recent,
 }
 
@@ -72,7 +72,7 @@ impl Default for UsageState {
         Self {
             range: crate::cli::tui::data::UsageRangePreset::SevenDays,
             metric: UsageMetric::Cost,
-            pane: UsagePane::Providers,
+            pane: UsagePane::Models,
             selected_idx: 0,
             logs_idx: 0,
         }

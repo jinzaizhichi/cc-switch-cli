@@ -20,7 +20,7 @@ use crate::{
         app,
         app::{
             Action, App, ConfigItem, ConfirmAction, ConfirmOverlay, EditorKind, EditorSubmit,
-            Focus, Overlay, TextInputState, TextSubmit,
+            Focus, Overlay, TextInputState, TextSubmit, UsagePane,
         },
         data::{
             ConfigSnapshot, McpSnapshot, ModelPricingRow, ModelPricingSnapshot,
@@ -99,15 +99,16 @@ fn tui_usage_empty_state_renders_dashboard_shell() {
 
     assert!(all.contains("Usage Statistics"), "{all}");
     assert!(all.contains("Usage Trend"), "{all}");
-    assert!(all.contains("Top Providers"), "{all}");
     assert!(all.contains("No usage recorded"), "{all}");
     assert!(all.contains("Today"), "{all}");
     assert!(all.contains("7 days"), "{all}");
     assert!(all.contains("30 days"), "{all}");
+    assert!(all.contains("details"), "{all}");
+    assert!(!all.contains("Provider Stats"), "{all}");
 }
 
 #[test]
-fn tui_usage_renders_summary_trend_and_recent_log() {
+fn tui_usage_renders_summary_and_trend() {
     let _lang = use_test_language(Language::English);
 
     let mut app = App::new(Some(AppType::Claude));
@@ -166,17 +167,18 @@ fn tui_usage_renders_summary_trend_and_recent_log() {
 
     assert!(all.contains("$1.250"), "{all}");
     assert!(all.contains("1.8k"), "{all}");
-    assert!(all.contains("Demo Provider"), "{all}");
     assert!(all.contains("06/05"), "{all}");
+    assert!(!all.contains("Demo Provider"), "{all}");
 }
 
 #[test]
-fn tui_usage_top_tables_follow_selected_range() {
+fn tui_usage_details_tables_follow_selected_range() {
     let _lang = use_test_language(Language::English);
 
     let mut app = App::new(Some(AppType::Claude));
-    app.route = Route::Usage;
+    app.route = Route::UsageLogs;
     app.focus = Focus::Content;
+    app.usage.pane = UsagePane::Providers;
 
     let mut data = minimal_data(&app.app_type);
     data.usage = UsageSnapshot {
@@ -202,6 +204,10 @@ fn tui_usage_top_tables_follow_selected_range() {
     };
 
     let week = all_text(&render_with_size(&app, &data, 160, 40));
+    assert!(week.contains("Usage Details"), "{week}");
+    assert!(week.contains("Model Stats"), "{week}");
+    assert!(week.contains("Provider Stats"), "{week}");
+    assert!(week.contains("Request Logs"), "{week}");
     assert!(week.contains("Week Provider"), "{week}");
     assert!(!week.contains("Today Provider"), "{week}");
 
@@ -229,7 +235,7 @@ fn tui_usage_narrow_width_renders_without_losing_primary_sections() {
     assert!(all.contains("Usage Statistics"), "{all}");
     assert!(all.contains("Overview"), "{all}");
     assert!(all.contains("Usage Trend"), "{all}");
-    assert!(all.contains("Top Providers"), "{all}");
+    assert!(!all.contains("Top Providers"), "{all}");
 }
 
 #[test]

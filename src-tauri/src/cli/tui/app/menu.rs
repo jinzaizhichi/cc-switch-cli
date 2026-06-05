@@ -498,22 +498,12 @@ impl App {
             KeyCode::Left if matches!(self.route, Route::Sessions) => {
                 return self.move_sessions_focus_left();
             }
-            KeyCode::Left
-                if matches!(self.route, Route::Usage) && matches!(self.focus, Focus::Content) =>
-            {
-                return self.on_usage_key(key, data);
-            }
             KeyCode::Left => {
                 self.focus = Focus::Nav;
                 return Action::None;
             }
             KeyCode::Right if matches!(self.route, Route::Sessions) => {
                 return self.move_sessions_focus_right(data);
-            }
-            KeyCode::Right
-                if matches!(self.route, Route::Usage) && matches!(self.focus, Focus::Content) =>
-            {
-                return self.on_usage_key(key, data);
             }
             KeyCode::Right => {
                 if route_has_content_list(&self.route) {
