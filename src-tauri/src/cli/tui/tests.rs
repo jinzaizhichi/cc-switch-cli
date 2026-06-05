@@ -217,8 +217,8 @@ fn app_data_result_preserves_usage_pricing_that_finished_first() {
             app_state_epoch: 0,
         },
     );
-    cache.pending_usage_pricing_by_app.insert(
-        AppType::Codex,
+    cache.pending_usage_pricing_by_key.insert(
+        (AppType::Codex, data::UsageRangePreset::SevenDays),
         PendingDataLoad {
             request_id: 1,
             generation: 0,
@@ -247,7 +247,11 @@ fn app_data_result_preserves_usage_pricing_that_finished_first() {
             generation: 0,
             app_state_epoch: 0,
             app_type: AppType::Codex,
-            result: Ok(data::UsagePricingData { usage, pricing }),
+            range: data::UsageRangePreset::SevenDays,
+            result: Ok(data::UsagePricingData {
+                usage,
+                pricing: Some(pricing),
+            }),
         },
     );
 
@@ -380,8 +384,18 @@ fn usage_pricing_results_are_tracked_per_app() {
     let mut cache = UiDataByAppCache::default();
     let (tx, rx) = mpsc::channel();
 
-    cache.queue_usage_pricing_load(&mut app, Some(&tx), &AppType::Claude);
-    cache.queue_usage_pricing_load(&mut app, Some(&tx), &AppType::Codex);
+    cache.queue_usage_pricing_load(
+        &mut app,
+        Some(&tx),
+        &AppType::Claude,
+        data::UsageRangePreset::SevenDays,
+    );
+    cache.queue_usage_pricing_load(
+        &mut app,
+        Some(&tx),
+        &AppType::Codex,
+        data::UsageRangePreset::SevenDays,
+    );
 
     let requests = [rx.recv().unwrap(), rx.recv().unwrap()];
     assert!(requests.iter().any(|req| matches!(
@@ -415,9 +429,10 @@ fn usage_pricing_results_are_tracked_per_app() {
             generation: 0,
             app_state_epoch: 0,
             app_type: AppType::Codex,
+            range: data::UsageRangePreset::SevenDays,
             result: Ok(data::UsagePricingData {
                 usage: codex_usage,
-                pricing: data::ModelPricingSnapshot::default(),
+                pricing: Some(data::ModelPricingSnapshot::default()),
             }),
         },
     );
@@ -430,9 +445,10 @@ fn usage_pricing_results_are_tracked_per_app() {
             generation: 0,
             app_state_epoch: 0,
             app_type: AppType::Claude,
+            range: data::UsageRangePreset::SevenDays,
             result: Ok(data::UsagePricingData {
                 usage: claude_usage,
-                pricing: data::ModelPricingSnapshot::default(),
+                pricing: Some(data::ModelPricingSnapshot::default()),
             }),
         },
     );
@@ -440,11 +456,265 @@ fn usage_pricing_results_are_tracked_per_app() {
     assert_eq!(data.usage.summary_7d.total_cost_usd, 1.0);
     assert_eq!(
         cache
-            .usage_pricing_by_app
-            .get(&AppType::Codex)
+            .usage_pricing_by_key
+            .get(&(AppType::Codex, data::UsageRangePreset::SevenDays))
             .map(|usage_pricing| usage_pricing.usage.summary_7d.total_cost_usd),
         Some(2.0)
     );
+}
+
+#[test]
+fn usage_custom_range_action_queues_range_specific_load() {
+    let mut terminal = TuiTerminal::new_for_test().expect("create terminal");
+    let mut app = App::new(Some(AppType::Claude));
+    let mut data = UiData::default();
+    let mut cache = UiDataByAppCache::default();
+    let mut proxy_loading = RequestTracker::default();
+    let mut webdav_loading = RequestTracker::default();
+    let mut update_check = RequestTracker::default();
+    let (tx, rx) = mpsc::channel();
+    let range =
+        data::parse_usage_custom_range("2026-06-01..2026-06-05").expect("valid custom range");
+    data.usage.recent_logs.push(data::UsageLogRow {
+        request_id: "stale-log".to_string(),
+        ..data::UsageLogRow::default()
+    });
+    data.usage.logs_total = 1;
+    data.usage.recent_logs_custom.push(data::UsageLogRow {
+        request_id: "stale-custom-log".to_string(),
+        ..data::UsageLogRow::default()
+    });
+    data.usage.logs_total_custom = 1;
+
+    handle_tui_action(
+        &mut terminal,
+        &mut app,
+        &mut data,
+        &mut cache,
+        None,
+        None,
+        None,
+        None,
+        None,
+        &mut proxy_loading,
+        None,
+        None,
+        None,
+        &mut webdav_loading,
+        None,
+        &mut update_check,
+        None,
+        None,
+        None,
+        Some(&tx),
+        Action::UsageCustomRange { range },
+    )
+    .expect("custom range action should be handled");
+
+    assert!(matches!(
+        app.usage.range,
+        data::UsageRangePreset::Custom(active) if active == range
+    ));
+    assert_eq!(data.usage.custom_range, Some(range));
+    assert!(!data.usage.trends_custom.is_empty());
+    assert_eq!(data.usage.recent_logs.len(), 1);
+    assert_eq!(data.usage.logs_total, 1);
+    assert!(data
+        .usage
+        .recent_logs_for(data::UsageRangePreset::Custom(range))
+        .is_empty());
+    assert_eq!(
+        data.usage
+            .logs_total_for(data::UsageRangePreset::Custom(range)),
+        0
+    );
+    assert_eq!(
+        cache
+            .pending_usage_pricing_by_key
+            .get(&(AppType::Claude, data::UsageRangePreset::Custom(range)))
+            .copied(),
+        Some(PendingDataLoad {
+            request_id: 1,
+            generation: 0,
+            app_state_epoch: 0,
+        })
+    );
+    assert!(matches!(
+        rx.recv().expect("custom usage/pricing request should be queued"),
+        UsagePricingReq::Load {
+            request_id: 1,
+            generation: 0,
+            app_state_epoch: 0,
+            app_type: AppType::Claude,
+            range: data::UsageRangePreset::Custom(queued_range),
+        } if queued_range == range
+    ));
+}
+
+#[test]
+fn usage_custom_range_app_switch_does_not_show_stale_custom_cache() {
+    let mut app = App::new(Some(AppType::Claude));
+    let mut data = UiData::default();
+    let mut cache = UiDataByAppCache::default();
+    let active_range =
+        data::parse_usage_custom_range("2026-06-01..2026-06-05").expect("valid active range");
+    let stale_range =
+        data::parse_usage_custom_range("2026-05-01..2026-05-05").expect("valid stale range");
+
+    app.usage.range = data::UsageRangePreset::Custom(active_range);
+    data.usage.begin_custom_range(active_range);
+
+    let mut stale_usage = data::UsageSnapshot::default();
+    stale_usage.custom_range = Some(stale_range);
+    stale_usage.summary_custom.total_requests = 99;
+    stale_usage.summary_custom.total_cost_usd = 12.34;
+    cache.usage_pricing_by_key.insert(
+        (AppType::Codex, data::UsageRangePreset::Custom(stale_range)),
+        data::UsagePricingData {
+            usage: stale_usage,
+            pricing: None,
+        },
+    );
+    cache.by_app.insert(AppType::Codex, UiData::default());
+
+    cache
+        .switch_to(&mut app, &mut data, None, AppType::Codex)
+        .expect("switch should work");
+
+    assert_eq!(app.app_type, AppType::Codex);
+    assert_eq!(data.usage.custom_range, Some(active_range));
+    assert_eq!(data.usage.summary_custom.total_requests, 0);
+    assert_eq!(data.usage.summary_custom.total_cost_usd, 0.0);
+}
+
+#[test]
+fn usage_fixed_result_does_not_replace_active_custom_logs() {
+    let mut app = App::new(Some(AppType::Claude));
+    let mut data = UiData::default();
+    let mut cache = UiDataByAppCache::default();
+    let active_range =
+        data::parse_usage_custom_range("2026-06-01..2026-06-05").expect("valid active range");
+    app.usage.range = data::UsageRangePreset::Custom(active_range);
+    data.usage.begin_custom_range(active_range);
+    data.usage.recent_logs_custom.push(data::UsageLogRow {
+        request_id: "custom-log".to_string(),
+        ..data::UsageLogRow::default()
+    });
+    data.usage.logs_total_custom = 1;
+    cache.pending_usage_pricing_by_key.insert(
+        (AppType::Claude, data::UsageRangePreset::SevenDays),
+        PendingDataLoad {
+            request_id: 1,
+            generation: 0,
+            app_state_epoch: 0,
+        },
+    );
+
+    let mut fixed_usage = data::UsageSnapshot::default();
+    fixed_usage.summary_7d.total_requests = 10;
+    fixed_usage.recent_logs.push(data::UsageLogRow {
+        request_id: "fixed-log".to_string(),
+        ..data::UsageLogRow::default()
+    });
+    fixed_usage.logs_total = 10;
+
+    handle_usage_pricing_msg(
+        &mut app,
+        &mut data,
+        &mut cache,
+        UsagePricingMsg::Loaded {
+            request_id: 1,
+            generation: 0,
+            app_state_epoch: 0,
+            app_type: AppType::Claude,
+            range: data::UsageRangePreset::SevenDays,
+            result: Ok(data::UsagePricingData {
+                usage: fixed_usage,
+                pricing: Some(data::ModelPricingSnapshot::default()),
+            }),
+        },
+    );
+
+    assert_eq!(data.usage.summary_7d.total_requests, 10);
+    assert_eq!(
+        data.usage
+            .logs_total_for(data::UsageRangePreset::Custom(active_range)),
+        1
+    );
+    assert_eq!(
+        data.usage
+            .recent_logs_for(data::UsageRangePreset::Custom(active_range))[0]
+            .request_id,
+        "custom-log"
+    );
+    assert_eq!(
+        data.usage.logs_total_for(data::UsageRangePreset::SevenDays),
+        10
+    );
+    assert_eq!(
+        data.usage
+            .recent_logs_for(data::UsageRangePreset::SevenDays)[0]
+            .request_id,
+        "fixed-log"
+    );
+}
+
+#[test]
+#[serial]
+fn usage_custom_range_reload_requeues_active_custom_range() {
+    let temp_home = TempDir::new().expect("create temp home");
+    let _env = EnvGuard::set_home(temp_home.path());
+    let mut terminal = TuiTerminal::new_for_test().expect("create terminal");
+    let mut app = App::new(Some(AppType::Claude));
+    let mut data = UiData::default();
+    let mut cache = UiDataByAppCache::default();
+    let mut proxy_loading = RequestTracker::default();
+    let mut webdav_loading = RequestTracker::default();
+    let mut update_check = RequestTracker::default();
+    let (tx, rx) = mpsc::channel();
+    let range =
+        data::parse_usage_custom_range("2026-06-01..2026-06-05").expect("valid custom range");
+
+    app.usage.range = data::UsageRangePreset::Custom(range);
+    data.usage.custom_range = Some(range);
+    data.usage.summary_custom.total_requests = 42;
+
+    handle_tui_action(
+        &mut terminal,
+        &mut app,
+        &mut data,
+        &mut cache,
+        None,
+        None,
+        None,
+        None,
+        None,
+        &mut proxy_loading,
+        None,
+        None,
+        None,
+        &mut webdav_loading,
+        None,
+        &mut update_check,
+        None,
+        None,
+        None,
+        Some(&tx),
+        Action::ReloadData,
+    )
+    .expect("reload data should be handled");
+
+    assert_eq!(data.usage.custom_range, Some(range));
+    assert_eq!(data.usage.summary_custom.total_requests, 0);
+    assert!(matches!(
+        rx.recv().expect("custom usage/pricing reload should be queued"),
+        UsagePricingReq::Load {
+            request_id: 1,
+            app_type: AppType::Claude,
+            range: data::UsageRangePreset::Custom(queued_range),
+            ..
+        } if queued_range == range
+    ));
 }
 
 #[test]

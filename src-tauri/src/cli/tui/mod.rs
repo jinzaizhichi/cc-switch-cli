@@ -265,19 +265,46 @@ struct UiDataByAppCache {
     by_app: HashMap<AppType, data::UiData>,
     pending_by_app: HashMap<AppType, PendingDataLoad>,
     incomplete_by_app: HashSet<AppType>,
-    usage_pricing_by_app: HashMap<AppType, data::UsagePricingData>,
-    pending_usage_pricing_by_app: HashMap<AppType, PendingDataLoad>,
+    usage_pricing_by_key: HashMap<UsagePricingLoadKey, data::UsagePricingData>,
+    pending_usage_pricing_by_key: HashMap<UsagePricingLoadKey, PendingDataLoad>,
     next_app_data_request_id: u64,
     next_usage_pricing_request_id: u64,
     data_generation: u64,
     app_state_epoch: u64,
 }
 
+type UsagePricingLoadKey = (AppType, data::UsageRangePreset);
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct PendingDataLoad {
     request_id: u64,
     generation: u64,
     app_state_epoch: u64,
+}
+
+fn usage_pricing_range_matches_active(
+    cached_range: data::UsageRangePreset,
+    active_range: data::UsageRangePreset,
+) -> bool {
+    match (cached_range, active_range) {
+        (data::UsageRangePreset::Custom(cached), data::UsageRangePreset::Custom(active)) => {
+            cached == active
+        }
+        (data::UsageRangePreset::Custom(_), _) => false,
+        _ => true,
+    }
+}
+
+fn align_usage_to_active_range(
+    usage: &mut data::UsageSnapshot,
+    active_range: data::UsageRangePreset,
+) {
+    let data::UsageRangePreset::Custom(active_custom_range) = active_range else {
+        return;
+    };
+    if usage.custom_range != Some(active_custom_range) {
+        usage.begin_custom_range(active_custom_range);
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -295,20 +322,41 @@ impl UiDataByAppCache {
         self.by_app.insert(app_type.clone(), data.clone());
     }
 
-    fn update_usage_pricing(&mut self, app_type: &AppType, usage_pricing: data::UsagePricingData) {
+    fn update_usage_pricing(
+        &mut self,
+        app_type: &AppType,
+        range: data::UsageRangePreset,
+        usage_pricing: data::UsagePricingData,
+    ) {
         if let Some(cached) = self.by_app.get_mut(app_type) {
-            cached.usage = usage_pricing.usage.clone();
-            cached.pricing = usage_pricing.pricing.clone();
+            cached.usage.merge_range(range, usage_pricing.usage.clone());
+            if let Some(pricing) = &usage_pricing.pricing {
+                cached.pricing = pricing.clone();
+            }
         }
-        self.usage_pricing_by_app
-            .insert(app_type.clone(), usage_pricing);
+        self.usage_pricing_by_key
+            .insert((app_type.clone(), range), usage_pricing);
     }
 
-    fn merge_usage_pricing(&self, app_type: &AppType, data: &mut data::UiData) {
-        if let Some(usage_pricing) = self.usage_pricing_by_app.get(app_type) {
-            data.usage = usage_pricing.usage.clone();
-            data.pricing = usage_pricing.pricing.clone();
+    fn merge_usage_pricing(
+        &self,
+        app_type: &AppType,
+        data: &mut data::UiData,
+        active_range: data::UsageRangePreset,
+    ) {
+        for ((cached_app_type, range), usage_pricing) in &self.usage_pricing_by_key {
+            if cached_app_type != app_type {
+                continue;
+            }
+            if !usage_pricing_range_matches_active(*range, active_range) {
+                continue;
+            }
+            data.usage.merge_range(*range, usage_pricing.usage.clone());
+            if let Some(pricing) = &usage_pricing.pricing {
+                data.pricing = pricing.clone();
+            }
         }
+        align_usage_to_active_range(&mut data.usage, active_range);
     }
 
     fn clear(&mut self) {
@@ -316,8 +364,8 @@ impl UiDataByAppCache {
         self.by_app.clear();
         self.pending_by_app.clear();
         self.incomplete_by_app.clear();
-        self.usage_pricing_by_app.clear();
-        self.pending_usage_pricing_by_app.clear();
+        self.usage_pricing_by_key.clear();
+        self.pending_usage_pricing_by_key.clear();
     }
 
     fn clear_after_app_state_recreated(&mut self) {
@@ -396,12 +444,34 @@ impl UiDataByAppCache {
         app: &mut App,
         usage_pricing_req_tx: Option<&mpsc::Sender<UsagePricingReq>>,
         app_type: &AppType,
+        range: data::UsageRangePreset,
     ) {
-        if self.pending_usage_pricing_by_app.contains_key(app_type) {
+        if matches!(range, data::UsageRangePreset::Custom(_)) {
+            self.pending_usage_pricing_by_key
+                .retain(|(cached_app_type, cached_range), _| {
+                    cached_app_type != app_type
+                        || !matches!(cached_range, data::UsageRangePreset::Custom(_))
+                });
+            self.usage_pricing_by_key
+                .retain(|(cached_app_type, cached_range), _| {
+                    cached_app_type != app_type
+                        || !matches!(cached_range, data::UsageRangePreset::Custom(_))
+                });
+        }
+
+        let key = (app_type.clone(), range);
+        if self.pending_usage_pricing_by_key.contains_key(&key) {
             return;
         }
 
         let Some(tx) = usage_pricing_req_tx else {
+            if matches!(range, data::UsageRangePreset::Custom(_)) {
+                app.push_toast(
+                    "Usage/pricing worker is not running; custom range cannot be loaded."
+                        .to_string(),
+                    ToastKind::Warning,
+                );
+            }
             return;
         };
 
@@ -412,16 +482,17 @@ impl UiDataByAppCache {
             generation: self.data_generation,
             app_state_epoch: self.app_state_epoch,
         };
-        self.pending_usage_pricing_by_app
-            .insert(app_type.clone(), pending);
+        self.pending_usage_pricing_by_key
+            .insert(key.clone(), pending);
 
         if let Err(err) = tx.send(UsagePricingReq::Load {
             request_id,
             generation: pending.generation,
             app_state_epoch: pending.app_state_epoch,
             app_type: app_type.clone(),
+            range,
         }) {
-            self.pending_usage_pricing_by_app.remove(app_type);
+            self.pending_usage_pricing_by_key.remove(&key);
             app.push_toast(
                 format!("Usage/pricing refresh request failed: {err}"),
                 ToastKind::Warning,
@@ -435,8 +506,10 @@ impl UiDataByAppCache {
         request_id: u64,
         generation: u64,
         app_state_epoch: u64,
+        range: data::UsageRangePreset,
     ) -> bool {
-        if self.pending_usage_pricing_by_app.get(app_type).copied()
+        let key = (app_type.clone(), range);
+        if self.pending_usage_pricing_by_key.get(&key).copied()
             != Some(PendingDataLoad {
                 request_id,
                 generation,
@@ -445,7 +518,7 @@ impl UiDataByAppCache {
         {
             return false;
         }
-        self.pending_usage_pricing_by_app.remove(app_type);
+        self.pending_usage_pricing_by_key.remove(&key);
         true
     }
 
@@ -486,7 +559,7 @@ impl UiDataByAppCache {
             self.queue_app_data_load(app, app_data_req_tx, &next);
             data.app_switch_loading_projection(&next)
         };
-        self.merge_usage_pricing(&next, &mut next_data);
+        self.merge_usage_pricing(&next, &mut next_data, app.usage.range);
         next_data.quota = data.quota.clone();
 
         apply_preloaded_app_switch(app, data, next, next_data);
@@ -508,6 +581,7 @@ fn handle_usage_pricing_msg(
             generation,
             app_state_epoch,
             app_type,
+            range,
             result,
         } => {
             if !data_cache.finish_usage_pricing_load(
@@ -515,16 +589,19 @@ fn handle_usage_pricing_msg(
                 request_id,
                 generation,
                 app_state_epoch,
+                range,
             ) {
                 return;
             }
 
             match result {
                 Ok(usage_pricing) => {
-                    data_cache.update_usage_pricing(&app_type, usage_pricing.clone());
+                    data_cache.update_usage_pricing(&app_type, range, usage_pricing.clone());
                     if app.app_type == app_type {
-                        data.usage = usage_pricing.usage;
-                        data.pricing = usage_pricing.pricing;
+                        data.usage.merge_range(range, usage_pricing.usage);
+                        if let Some(pricing) = usage_pricing.pricing {
+                            data.pricing = pricing;
+                        }
                         app.clamp_selections(data);
                         data_cache.remember_current(&app.app_type, data);
                     }
@@ -564,7 +641,12 @@ fn handle_app_data_msg(
 
             match result {
                 Ok(mut loaded) => {
-                    data_cache.merge_usage_pricing(&app_type, &mut loaded);
+                    let active_range = if app.app_type == app_type {
+                        app.usage.range
+                    } else {
+                        data::UsageRangePreset::SevenDays
+                    };
+                    data_cache.merge_usage_pricing(&app_type, &mut loaded, active_range);
                     data_cache.mark_app_data_loaded(&app_type);
                     if app.app_type == app_type {
                         loaded.quota = data.quota.clone();
@@ -610,6 +692,7 @@ fn cache_invalidation_for_action(action: &Action) -> CacheInvalidation {
         | Action::ProviderStreamCheck { .. }
         | Action::ProviderQuotaRefresh { .. }
         | Action::ProviderModelFetch { .. }
+        | Action::UsageCustomRange { .. }
         | Action::ManagedAuthRefresh { .. }
         | Action::ManagedAuthStartLogin { .. }
         | Action::ManagedAuthSetDefault { .. }
@@ -759,9 +842,29 @@ fn apply_cache_invalidation(
         drop_cached_worker_state(app_data_req_tx, usage_pricing_req_tx)?;
     }
 
+    let active_custom_range = if matches!(invalidation, CacheInvalidation::None) {
+        None
+    } else if let data::UsageRangePreset::Custom(range) = app.usage.range {
+        data.usage.begin_custom_range(range);
+        app.clamp_selections(data);
+        Some(range)
+    } else {
+        None
+    };
+
     data_cache.handle_data_reloaded(app, data, invalidation);
     if !matches!(invalidation, CacheInvalidation::None) {
         queue_current_quota_refresh_if_due(app, data, quota_req_tx);
+        if let Some(range) = active_custom_range {
+            let current_app_type = app.app_type.clone();
+            data_cache.queue_usage_pricing_load(
+                app,
+                usage_pricing_req_tx,
+                &current_app_type,
+                data::UsageRangePreset::Custom(range),
+            );
+            data_cache.remember_current(&app.app_type, data);
+        }
     }
 
     Ok(())
@@ -799,8 +902,35 @@ fn handle_tui_action(
         Action::SetAppType(next) => {
             data_cache.switch_to(app, data, app_data_req_tx, next)?;
             let current_app_type = app.app_type.clone();
-            data_cache.queue_usage_pricing_load(app, usage_pricing_req_tx, &current_app_type);
+            data_cache.queue_usage_pricing_load(
+                app,
+                usage_pricing_req_tx,
+                &current_app_type,
+                data::UsageRangePreset::SevenDays,
+            );
+            if matches!(app.usage.range, data::UsageRangePreset::Custom(_)) {
+                data_cache.queue_usage_pricing_load(
+                    app,
+                    usage_pricing_req_tx,
+                    &current_app_type,
+                    app.usage.range,
+                );
+            }
             queue_current_quota_refresh_if_due(app, data, quota_req_tx);
+            Ok(())
+        }
+        Action::UsageCustomRange { range } => {
+            app.usage.range = data::UsageRangePreset::Custom(range);
+            data.usage.begin_custom_range(range);
+            app.clamp_selections(data);
+            let current_app_type = app.app_type.clone();
+            data_cache.queue_usage_pricing_load(
+                app,
+                usage_pricing_req_tx,
+                &current_app_type,
+                data::UsageRangePreset::Custom(range),
+            );
+            data_cache.remember_current(&app.app_type, data);
             Ok(())
         }
         other => {

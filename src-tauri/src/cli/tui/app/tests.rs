@@ -13925,6 +13925,77 @@ mod tests {
     }
 
     #[test]
+    fn usage_custom_range_shortcut_opens_text_input() {
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::Usage;
+        app.focus = Focus::Content;
+
+        let action = app.on_key(key(KeyCode::Char('C')), &UiData::default());
+
+        assert!(matches!(action, Action::None));
+        assert!(matches!(
+            &app.overlay,
+            Overlay::TextInput(TextInputState {
+                submit: TextSubmit::UsageCustomRange,
+                input,
+                ..
+            }) if input.value.contains("..")
+        ));
+    }
+
+    #[test]
+    fn usage_custom_range_submit_emits_action() {
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::Usage;
+        app.focus = Focus::Content;
+        app.overlay = Overlay::TextInput(TextInputState {
+            title: "Custom Range".to_string(),
+            prompt: "Format: YYYY-MM-DD..YYYY-MM-DD".to_string(),
+            input: TextInput::new("2026-06-01..2026-06-05"),
+            submit: TextSubmit::UsageCustomRange,
+            secret: false,
+        });
+
+        let action = app.on_key(key(KeyCode::Enter), &UiData::default());
+
+        assert!(matches!(
+            action,
+            Action::UsageCustomRange { range } if range.label() == "2026-06-01..2026-06-05"
+        ));
+        assert!(matches!(app.overlay, Overlay::None));
+    }
+
+    #[test]
+    fn usage_custom_range_invalid_submit_reopens_input() {
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::Usage;
+        app.focus = Focus::Content;
+        app.overlay = Overlay::TextInput(TextInputState {
+            title: "Custom Range".to_string(),
+            prompt: "Format: YYYY-MM-DD..YYYY-MM-DD".to_string(),
+            input: TextInput::new("2026-06-05..2026-06-01"),
+            submit: TextSubmit::UsageCustomRange,
+            secret: false,
+        });
+
+        let action = app.on_key(key(KeyCode::Enter), &UiData::default());
+
+        assert!(matches!(action, Action::None));
+        assert!(matches!(
+            &app.overlay,
+            Overlay::TextInput(TextInputState {
+                submit: TextSubmit::UsageCustomRange,
+                input,
+                ..
+            }) if input.value == "2026-06-05..2026-06-01"
+        ));
+        assert!(matches!(
+            app.toast.as_ref().map(|toast| &toast.kind),
+            Some(ToastKind::Warning)
+        ));
+    }
+
+    #[test]
     fn usage_details_tabs_and_log_detail_route_use_stack() {
         let mut app = App::new(Some(AppType::Claude));
         app.route = Route::Usage;

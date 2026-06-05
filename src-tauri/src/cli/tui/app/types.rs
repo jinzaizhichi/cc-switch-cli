@@ -429,6 +429,7 @@ pub enum TextSubmit {
     OpenClawAgentsRuntimeField {
         field: OpenClawAgentsRuntimeField,
     },
+    UsageCustomRange,
     WebDavJianguoyunUsername,
     WebDavJianguoyunPassword,
 }

@@ -404,6 +404,7 @@ pub(crate) fn handle_action(
             field,
             claude_idx,
         ),
+        Action::UsageCustomRange { .. } => Ok(()),
         Action::McpToggle { id, enabled } => mcp::toggle(&mut ctx, id, enabled),
         Action::McpSetApps { id, apps } => mcp::set_apps(&mut ctx, id, apps),
         Action::McpDelete { id } => mcp::delete(&mut ctx, id),

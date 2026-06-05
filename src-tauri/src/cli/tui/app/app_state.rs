@@ -111,6 +111,9 @@ pub enum Action {
         field: ProviderAddField,
         claude_idx: Option<usize>,
     },
+    UsageCustomRange {
+        range: data::UsageCustomRange,
+    },
 
     ManagedAuthRefresh {
         auth_provider: String,

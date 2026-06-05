@@ -39,6 +39,7 @@ pub(super) fn render_usage(
                 ("1", usage_text("Today", "今日")),
                 ("2", usage_text("7 days", "7天")),
                 ("3", usage_text("30 days", "30天")),
+                ("C", usage_text("custom range", "自定义区间")),
                 ("Tab", texts::tui_key_pane()),
                 ("L", usage_text("details", "详情")),
                 ("r", texts::tui_key_refresh()),
@@ -135,7 +136,7 @@ pub(super) fn render_usage_log_detail(
 
     let row = data
         .usage
-        .recent_logs
+        .recent_logs_for(app.usage.range)
         .iter()
         .find(|row| row.request_id == request_id);
     render_usage_detail_body(frame, row, chunks[1], theme);
@@ -856,7 +857,8 @@ fn render_usage_logs_table(
     area: Rect,
     theme: &super::theme::Theme,
 ) {
-    if data.usage.recent_logs.is_empty() {
+    let logs = data.usage.recent_logs_for(app.usage.range);
+    if logs.is_empty() {
         render_empty_table(frame, area, theme);
         return;
     }
@@ -869,7 +871,7 @@ fn render_usage_logs_table(
             Cell::from(usage_text("Cost", "费用")),
         ])
         .style(Style::default().fg(theme.dim).add_modifier(Modifier::BOLD));
-        let rows = data.usage.recent_logs.iter().map(|row| {
+        let rows = logs.iter().map(|row| {
             Row::new(vec![
                 Cell::from(format_log_time(row.created_at, true)),
                 Cell::from(row.model.clone()),
@@ -906,7 +908,7 @@ fn render_usage_logs_table(
         Cell::from(usage_text("Latency", "延迟")),
     ])
     .style(Style::default().fg(theme.dim).add_modifier(Modifier::BOLD));
-    let rows = data.usage.recent_logs.iter().map(|row| {
+    let rows = logs.iter().map(|row| {
         Row::new(vec![
             Cell::from(format_log_time(row.created_at, true)),
             Cell::from(display_provider_name(
@@ -1141,17 +1143,15 @@ fn usage_detail_summary_line(app: &App, data: &UiData) -> String {
             }
         }
         UsagePane::Recent => {
+            let logs = data.usage.recent_logs_for(app.usage.range);
+            let total = data.usage.logs_total_for(app.usage.range);
             if i18n::is_chinese() {
-                format!(
-                    "请求日志 · 显示最近 {} 条 · 共 {} 条",
-                    data.usage.recent_logs.len(),
-                    data.usage.logs_total
-                )
+                format!("请求日志 · 显示最近 {} 条 · 共 {} 条", logs.len(), total)
             } else {
                 format!(
                     "request logs · latest {} rows shown · {} total rows",
-                    data.usage.recent_logs.len(),
-                    data.usage.logs_total
+                    logs.len(),
+                    total
                 )
             }
         }

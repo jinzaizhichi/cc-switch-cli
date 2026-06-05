@@ -103,6 +103,7 @@ fn tui_usage_empty_state_renders_dashboard_shell() {
     assert!(all.contains("Today"), "{all}");
     assert!(all.contains("7 days"), "{all}");
     assert!(all.contains("30 days"), "{all}");
+    assert!(all.contains("custom range"), "{all}");
     assert!(all.contains("switch panel"), "{all}");
     assert!(all.contains("details"), "{all}");
     assert!(!all.contains("metric"), "{all}");

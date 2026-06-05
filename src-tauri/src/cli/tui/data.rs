@@ -26,6 +26,23 @@ use crate::services::config::BackupInfo;
 use crate::services::{ConfigService, McpService, PromptService, ProviderService, SkillService};
 use crate::store::AppState;
 
+const USAGE_CUSTOM_RANGE_MAX_DAYS: i64 = 3660;
+const EMPTY_USAGE_SUMMARY: UsageSummarySnapshot = UsageSummarySnapshot {
+    total_requests: 0,
+    success_count: 0,
+    total_cost_usd: 0.0,
+    total_tokens: 0,
+    input_tokens: 0,
+    output_tokens: 0,
+    cache_read_tokens: 0,
+    cache_creation_tokens: 0,
+    avg_latency_ms: None,
+    avg_first_token_ms: None,
+};
+const EMPTY_USAGE_TREND: [UsageTrendBucket; 0] = [];
+const EMPTY_USAGE_PROVIDER_ROWS: [UsageProviderStatsRow; 0] = [];
+const EMPTY_USAGE_MODEL_ROWS: [UsageModelStatsRow; 0] = [];
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct UiDataReloadToken(u64);
 
@@ -300,19 +317,27 @@ impl ProxySnapshot {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum UsageRangePreset {
     Today,
     SevenDays,
     ThirtyDays,
+    Custom(UsageCustomRange),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct UsageCustomRange {
+    pub start: i64,
+    pub end: i64,
 }
 
 impl UsageRangePreset {
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
-            Self::Today => "Today",
-            Self::SevenDays => "7d",
-            Self::ThirtyDays => "30d",
+            Self::Today => "Today".to_string(),
+            Self::SevenDays => "7d".to_string(),
+            Self::ThirtyDays => "30d".to_string(),
+            Self::Custom(range) => range.label(),
         }
     }
 
@@ -321,6 +346,38 @@ impl UsageRangePreset {
             Self::Today => 1,
             Self::SevenDays => 7,
             Self::ThirtyDays => 30,
+            Self::Custom(range) => range.days(),
+        }
+    }
+
+    fn uses_hourly_trend(self, start: i64, end: i64) -> bool {
+        matches!(self, Self::Today) || end.saturating_sub(start) <= 24 * 60 * 60
+    }
+}
+
+impl UsageCustomRange {
+    pub fn label(self) -> String {
+        format!(
+            "{}..{}",
+            format_usage_custom_range_date(self.start),
+            format_usage_custom_range_date(self.end)
+        )
+    }
+
+    fn days(self) -> u64 {
+        let start = Local
+            .timestamp_opt(self.start, 0)
+            .single()
+            .map(|datetime| datetime.date_naive());
+        let end = Local
+            .timestamp_opt(self.end, 0)
+            .single()
+            .map(|datetime| datetime.date_naive());
+        match (start, end) {
+            (Some(start), Some(end)) if end >= start => {
+                end.signed_duration_since(start).num_days() as u64 + 1
+            }
+            _ => 1,
         }
     }
 }
@@ -329,6 +386,67 @@ impl Default for UsageRangePreset {
     fn default() -> Self {
         Self::SevenDays
     }
+}
+
+pub(crate) fn usage_custom_range_default_input() -> String {
+    let today = Local::now().date_naive();
+    let start = today.checked_sub_days(Days::new(6)).unwrap_or(today);
+    format!("{}..{}", start.format("%Y-%m-%d"), today.format("%Y-%m-%d"))
+}
+
+pub(crate) fn parse_usage_custom_range(raw: &str) -> Result<UsageCustomRange, String> {
+    let trimmed = raw.trim();
+    let parts = split_usage_custom_range_input(trimmed);
+    let [start_raw, end_raw] = parts.as_slice() else {
+        return Err("Use YYYY-MM-DD..YYYY-MM-DD".to_string());
+    };
+
+    let start_date = parse_usage_custom_date(start_raw)?;
+    let end_date = parse_usage_custom_date(end_raw)?;
+    if end_date < start_date {
+        return Err("Start date must be before end date".to_string());
+    }
+    if end_date.signed_duration_since(start_date).num_days() + 1 > USAGE_CUSTOM_RANGE_MAX_DAYS {
+        return Err("Custom range cannot exceed 3660 days".to_string());
+    }
+
+    let start = local_midnight_timestamp(start_date);
+    let end = local_end_of_day_timestamp(end_date);
+
+    Ok(UsageCustomRange { start, end })
+}
+
+fn split_usage_custom_range_input(input: &str) -> Vec<&str> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+
+    for separator in ["..", " - ", " to ", " TO ", ",", "，", ";", "；"] {
+        if let Some((start, end)) = trimmed.split_once(separator) {
+            return vec![start.trim(), end.trim()];
+        }
+    }
+
+    let parts = trimmed.split_whitespace().collect::<Vec<_>>();
+    if parts.len() == 2 {
+        return parts;
+    }
+
+    vec![trimmed]
+}
+
+fn parse_usage_custom_date(raw: &str) -> Result<NaiveDate, String> {
+    NaiveDate::parse_from_str(raw.trim(), "%Y-%m-%d")
+        .map_err(|_| "Use date format YYYY-MM-DD".to_string())
+}
+
+fn format_usage_custom_range_date(timestamp: i64) -> String {
+    Local
+        .timestamp_opt(timestamp, 0)
+        .single()
+        .map(|datetime| datetime.date_naive().format("%Y-%m-%d").to_string())
+        .unwrap_or_else(|| "-".to_string())
 }
 
 #[derive(Debug, Clone, Default)]
@@ -458,8 +576,15 @@ pub struct UsageSnapshot {
     pub top_models_today: Vec<UsageModelStatsRow>,
     pub top_models_7d: Vec<UsageModelStatsRow>,
     pub top_models_30d: Vec<UsageModelStatsRow>,
+    pub custom_range: Option<UsageCustomRange>,
+    pub summary_custom: UsageSummarySnapshot,
+    pub trends_custom: Vec<UsageTrendBucket>,
+    pub top_providers_custom: Vec<UsageProviderStatsRow>,
+    pub top_models_custom: Vec<UsageModelStatsRow>,
     pub recent_logs: Vec<UsageLogRow>,
     pub logs_total: u64,
+    pub recent_logs_custom: Vec<UsageLogRow>,
+    pub logs_total_custom: u64,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -487,7 +612,7 @@ pub struct ModelPricingSnapshot {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct UsagePricingData {
     pub usage: UsageSnapshot,
-    pub pricing: ModelPricingSnapshot,
+    pub pricing: Option<ModelPricingSnapshot>,
 }
 
 impl ModelPricingSnapshot {
@@ -545,11 +670,59 @@ impl ConfigSnapshot {
 }
 
 impl UsageSnapshot {
+    pub(crate) fn begin_custom_range(&mut self, range: UsageCustomRange) {
+        self.custom_range = Some(range);
+        self.summary_custom = UsageSummarySnapshot::default();
+        self.trends_custom = empty_usage_trend(UsageRangePreset::Custom(range));
+        self.top_providers_custom.clear();
+        self.top_models_custom.clear();
+        self.recent_logs_custom.clear();
+        self.logs_total_custom = 0;
+    }
+
+    pub(crate) fn merge_range(&mut self, range: UsageRangePreset, loaded: UsageSnapshot) {
+        match range {
+            UsageRangePreset::Custom(custom_range) => {
+                self.custom_range = loaded.custom_range.or(Some(custom_range));
+                self.summary_custom = loaded.summary_custom;
+                self.trends_custom = loaded.trends_custom;
+                self.top_providers_custom = loaded.top_providers_custom;
+                self.top_models_custom = loaded.top_models_custom;
+                self.recent_logs_custom = loaded.recent_logs_custom;
+                self.logs_total_custom = loaded.logs_total_custom;
+            }
+            UsageRangePreset::Today
+            | UsageRangePreset::SevenDays
+            | UsageRangePreset::ThirtyDays => {
+                let custom_range = self.custom_range;
+                let summary_custom = self.summary_custom.clone();
+                let trends_custom = self.trends_custom.clone();
+                let top_providers_custom = self.top_providers_custom.clone();
+                let top_models_custom = self.top_models_custom.clone();
+                let recent_logs_custom = self.recent_logs_custom.clone();
+                let logs_total_custom = self.logs_total_custom;
+
+                *self = loaded;
+                self.custom_range = custom_range;
+                self.summary_custom = summary_custom;
+                self.trends_custom = trends_custom;
+                self.top_providers_custom = top_providers_custom;
+                self.top_models_custom = top_models_custom;
+                self.recent_logs_custom = recent_logs_custom;
+                self.logs_total_custom = logs_total_custom;
+            }
+        }
+    }
+
     pub fn summary_for(&self, range: UsageRangePreset) -> &UsageSummarySnapshot {
         match range {
             UsageRangePreset::Today => &self.summary_today,
             UsageRangePreset::SevenDays => &self.summary_7d,
             UsageRangePreset::ThirtyDays => &self.summary_30d,
+            UsageRangePreset::Custom(custom_range) if self.custom_range == Some(custom_range) => {
+                &self.summary_custom
+            }
+            UsageRangePreset::Custom(_) => &EMPTY_USAGE_SUMMARY,
         }
     }
 
@@ -558,6 +731,10 @@ impl UsageSnapshot {
             UsageRangePreset::Today => &self.trends_today,
             UsageRangePreset::SevenDays => &self.trends_7d,
             UsageRangePreset::ThirtyDays => &self.trends_30d,
+            UsageRangePreset::Custom(custom_range) if self.custom_range == Some(custom_range) => {
+                &self.trends_custom
+            }
+            UsageRangePreset::Custom(_) => &EMPTY_USAGE_TREND,
         }
     }
 
@@ -566,6 +743,10 @@ impl UsageSnapshot {
             UsageRangePreset::Today => &self.top_providers_today,
             UsageRangePreset::SevenDays => &self.top_providers_7d,
             UsageRangePreset::ThirtyDays => &self.top_providers_30d,
+            UsageRangePreset::Custom(custom_range) if self.custom_range == Some(custom_range) => {
+                &self.top_providers_custom
+            }
+            UsageRangePreset::Custom(_) => &EMPTY_USAGE_PROVIDER_ROWS,
         }
     }
 
@@ -574,6 +755,34 @@ impl UsageSnapshot {
             UsageRangePreset::Today => &self.top_models_today,
             UsageRangePreset::SevenDays => &self.top_models_7d,
             UsageRangePreset::ThirtyDays => &self.top_models_30d,
+            UsageRangePreset::Custom(custom_range) if self.custom_range == Some(custom_range) => {
+                &self.top_models_custom
+            }
+            UsageRangePreset::Custom(_) => &EMPTY_USAGE_MODEL_ROWS,
+        }
+    }
+
+    pub fn recent_logs_for(&self, range: UsageRangePreset) -> &[UsageLogRow] {
+        match range {
+            UsageRangePreset::Custom(custom_range) if self.custom_range == Some(custom_range) => {
+                &self.recent_logs_custom
+            }
+            UsageRangePreset::Custom(_) => &[],
+            UsageRangePreset::Today
+            | UsageRangePreset::SevenDays
+            | UsageRangePreset::ThirtyDays => &self.recent_logs,
+        }
+    }
+
+    pub fn logs_total_for(&self, range: UsageRangePreset) -> u64 {
+        match range {
+            UsageRangePreset::Custom(custom_range) if self.custom_range == Some(custom_range) => {
+                self.logs_total_custom
+            }
+            UsageRangePreset::Custom(_) => 0,
+            UsageRangePreset::Today
+            | UsageRangePreset::SevenDays
+            | UsageRangePreset::ThirtyDays => self.logs_total,
         }
     }
 }
@@ -620,7 +829,9 @@ impl UiData {
         let mut data = Self::load_base_from_state(&state, app_type)?;
         let usage_pricing = load_usage_pricing_data_from_state(&state, app_type)?;
         data.usage = usage_pricing.usage;
-        data.pricing = usage_pricing.pricing;
+        if let Some(pricing) = usage_pricing.pricing {
+            data.pricing = pricing;
+        }
 
         Ok(data)
     }
@@ -700,9 +911,24 @@ pub(crate) fn load_usage_pricing_data_from_state(
     state: &AppState,
     app_type: &AppType,
 ) -> Result<UsagePricingData, AppError> {
+    load_usage_pricing_data_from_state_for_range(state, app_type, UsageRangePreset::SevenDays)
+}
+
+pub(crate) fn load_usage_pricing_data_from_state_for_range(
+    state: &AppState,
+    app_type: &AppType,
+    range: UsageRangePreset,
+) -> Result<UsagePricingData, AppError> {
+    let pricing = match range {
+        UsageRangePreset::Custom(_) => None,
+        UsageRangePreset::Today | UsageRangePreset::SevenDays | UsageRangePreset::ThirtyDays => {
+            Some(load_model_pricing_snapshot(state, app_type)?)
+        }
+    };
+
     Ok(UsagePricingData {
-        usage: load_usage_snapshot(state, app_type)?,
-        pricing: load_model_pricing_snapshot(state, app_type)?,
+        usage: load_usage_snapshot_for_range(state, app_type, range)?,
+        pricing,
     })
 }
 
@@ -1258,7 +1484,25 @@ fn load_hermes_memory_snapshot(app_type: &AppType) -> Result<HermesMemorySnapsho
     })
 }
 
-fn load_usage_snapshot(state: &AppState, app_type: &AppType) -> Result<UsageSnapshot, AppError> {
+fn load_usage_snapshot_for_range(
+    state: &AppState,
+    app_type: &AppType,
+    range: UsageRangePreset,
+) -> Result<UsageSnapshot, AppError> {
+    match range {
+        UsageRangePreset::Custom(custom_range) => {
+            load_usage_custom_snapshot(state, app_type, custom_range)
+        }
+        UsageRangePreset::Today | UsageRangePreset::SevenDays | UsageRangePreset::ThirtyDays => {
+            load_usage_fixed_snapshot(state, app_type)
+        }
+    }
+}
+
+fn load_usage_fixed_snapshot(
+    state: &AppState,
+    app_type: &AppType,
+) -> Result<UsageSnapshot, AppError> {
     let app_key = app_type.as_str();
     let now = Local::now().timestamp();
     let today_start = usage_range_start(UsageRangePreset::Today);
@@ -1290,13 +1534,8 @@ fn load_usage_snapshot(state: &AppState, app_type: &AppType) -> Result<UsageSnap
     let top_models_today = load_usage_top_models(&conn, app_key, today_start, now)?;
     let top_models_7d = load_usage_top_models(&conn, app_key, seven_start, now)?;
     let top_models_30d = load_usage_top_models(&conn, app_key, thirty_start, now)?;
-    let recent_logs = load_usage_recent_logs(&conn, app_key, 100)?;
-    let effective_filter = crate::services::usage_stats::effective_usage_log_filter("l");
-    let logs_total = conn.query_row(
-        &format!("SELECT COUNT(*) FROM proxy_request_logs l WHERE l.app_type = ?1 AND {effective_filter}"),
-        params![app_key],
-        |row| row.get::<_, i64>(0),
-    )?;
+    let recent_logs = load_usage_recent_logs(&conn, app_key, None, 100)?;
+    let logs_total = load_usage_logs_total(&conn, app_key, None)?;
 
     Ok(UsageSnapshot {
         summary_today,
@@ -1312,7 +1551,43 @@ fn load_usage_snapshot(state: &AppState, app_type: &AppType) -> Result<UsageSnap
         top_models_7d,
         top_models_30d,
         recent_logs,
-        logs_total: non_negative_u64(logs_total),
+        logs_total,
+        ..UsageSnapshot::default()
+    })
+}
+
+fn load_usage_custom_snapshot(
+    state: &AppState,
+    app_type: &AppType,
+    custom_range: UsageCustomRange,
+) -> Result<UsageSnapshot, AppError> {
+    let app_key = app_type.as_str();
+    let conn = lock_conn!(state.db.conn);
+    let summary_custom = load_usage_summary(&conn, app_key, custom_range.start, custom_range.end)?;
+    let trends_custom = load_usage_trend(
+        &conn,
+        app_key,
+        UsageRangePreset::Custom(custom_range),
+        custom_range.start,
+        custom_range.end,
+    )?;
+    let top_providers_custom =
+        load_usage_top_providers(&conn, app_key, custom_range.start, custom_range.end)?;
+    let top_models_custom =
+        load_usage_top_models(&conn, app_key, custom_range.start, custom_range.end)?;
+    let log_range = Some((custom_range.start, custom_range.end));
+    let recent_logs = load_usage_recent_logs(&conn, app_key, log_range, 100)?;
+    let logs_total = load_usage_logs_total(&conn, app_key, log_range)?;
+
+    Ok(UsageSnapshot {
+        custom_range: Some(custom_range),
+        summary_custom,
+        trends_custom,
+        top_providers_custom,
+        top_models_custom,
+        recent_logs_custom: recent_logs,
+        logs_total_custom: logs_total,
+        ..UsageSnapshot::default()
     })
 }
 
@@ -1585,6 +1860,17 @@ fn local_midnight_timestamp(date: NaiveDate) -> i64 {
         .unwrap_or(0)
 }
 
+fn local_end_of_day_timestamp(date: NaiveDate) -> i64 {
+    let Some(naive) = date.and_hms_opt(23, 59, 59) else {
+        return 0;
+    };
+    Local
+        .from_local_datetime(&naive)
+        .latest()
+        .map(|datetime| datetime.timestamp())
+        .unwrap_or(0)
+}
+
 fn load_usage_summary(
     conn: &rusqlite::Connection,
     app_key: &str,
@@ -1641,11 +1927,16 @@ fn load_usage_trend(
         .map(|(idx, bucket)| (bucket.key.clone(), idx))
         .collect::<HashMap<_, _>>();
 
+    let hourly = range.uses_hourly_trend(start, end);
     let bucket_expr = match range {
         UsageRangePreset::Today => "strftime('%H', l.created_at, 'unixepoch', 'localtime')",
+        UsageRangePreset::Custom(_) if hourly => {
+            "strftime('%Y-%m-%d %H', l.created_at, 'unixepoch', 'localtime')"
+        }
         UsageRangePreset::SevenDays | UsageRangePreset::ThirtyDays => {
             "date(l.created_at, 'unixepoch', 'localtime')"
         }
+        UsageRangePreset::Custom(_) => "date(l.created_at, 'unixepoch', 'localtime')",
     };
     let total_tokens_expr = usage_stats_total_tokens_sql(Some("l"));
     let effective_filter = crate::services::usage_stats::effective_usage_log_filter("l");
@@ -1712,7 +2003,51 @@ fn empty_usage_trend(range: UsageRangePreset) -> Vec<UsageTrendBucket> {
                 })
                 .collect()
         }
+        UsageRangePreset::Custom(custom_range) => empty_usage_custom_trend(custom_range),
     }
+}
+
+fn empty_usage_custom_trend(range: UsageCustomRange) -> Vec<UsageTrendBucket> {
+    let Some(start_datetime) = Local.timestamp_opt(range.start, 0).single() else {
+        return Vec::new();
+    };
+    let Some(end_datetime) = Local.timestamp_opt(range.end, 0).single() else {
+        return Vec::new();
+    };
+    if UsageRangePreset::Custom(range).uses_hourly_trend(range.start, range.end) {
+        let same_day = start_datetime.date_naive() == end_datetime.date_naive();
+        let mut cursor = range.start - range.start.rem_euclid(3600);
+        let end = range.end - range.end.rem_euclid(3600);
+        let mut buckets = Vec::new();
+        while cursor <= end {
+            if let Some(datetime) = Local.timestamp_opt(cursor, 0).single() {
+                buckets.push(UsageTrendBucket {
+                    key: datetime.format("%Y-%m-%d %H").to_string(),
+                    label: if same_day {
+                        datetime.format("%H").to_string()
+                    } else {
+                        datetime.format("%m/%d %H").to_string()
+                    },
+                    ..UsageTrendBucket::default()
+                });
+            }
+            cursor = cursor.saturating_add(3600);
+        }
+        return buckets;
+    }
+
+    let start = start_datetime.date_naive();
+    let days = range.days();
+    (0..days)
+        .map(|offset| {
+            let date = start.checked_add_days(Days::new(offset)).unwrap_or(start);
+            UsageTrendBucket {
+                key: date.format("%Y-%m-%d").to_string(),
+                label: date.format("%m/%d").to_string(),
+                ..UsageTrendBucket::default()
+            }
+        })
+        .collect()
 }
 
 fn load_usage_top_providers(
@@ -1798,11 +2133,12 @@ fn load_usage_top_models(
 fn load_usage_recent_logs(
     conn: &rusqlite::Connection,
     app_key: &str,
+    range: Option<(i64, i64)>,
     limit: u16,
 ) -> Result<Vec<UsageLogRow>, AppError> {
     let effective_filter = crate::services::usage_stats::effective_usage_log_filter("l");
     let provider_name_expr = usage_provider_name_sql("l", "p");
-    let mut stmt = conn.prepare(&format!(
+    let sql = format!(
         "SELECT
             l.request_id,
             l.created_at,
@@ -1827,39 +2163,86 @@ fn load_usage_recent_logs(
             l.data_source
          FROM proxy_request_logs l
          LEFT JOIN providers p ON p.id = l.provider_id AND p.app_type = l.app_type
-         WHERE l.app_type = ?1
+         WHERE l.app_type = ?1 {range_filter}
            AND {effective_filter}
          ORDER BY l.created_at DESC, l.request_id DESC
-         LIMIT ?2",
-    ))?;
+         LIMIT {limit_param}",
+        range_filter = if range.is_some() {
+            "AND l.created_at >= ?2 AND l.created_at <= ?3"
+        } else {
+            ""
+        },
+        limit_param = if range.is_some() { "?4" } else { "?2" },
+    );
 
-    let rows = stmt.query_map(params![app_key, limit], |row| {
-        Ok(UsageLogRow {
-            request_id: row.get(0)?,
-            created_at: row.get(1)?,
-            app_type: row.get(2)?,
-            provider_id: row.get(3)?,
-            provider_name: normalize_optional_string(row.get::<_, Option<String>>(4)?),
-            model: row.get(5)?,
-            request_model: normalize_optional_string(row.get::<_, Option<String>>(6)?),
-            status_code: clamp_u16(row.get::<_, i64>(7)?),
-            input_tokens: non_negative_u64(row.get::<_, i64>(8)?),
-            output_tokens: non_negative_u64(row.get::<_, i64>(9)?),
-            cache_read_tokens: non_negative_u64(row.get::<_, i64>(10)?),
-            cache_creation_tokens: non_negative_u64(row.get::<_, i64>(11)?),
-            total_cost_usd: row.get::<_, f64>(12)?.max(0.0),
-            latency_ms: non_negative_u64(row.get::<_, i64>(13)?),
-            first_token_ms: row.get::<_, Option<i64>>(14)?.map(non_negative_u64),
-            duration_ms: row.get::<_, Option<i64>>(15)?.map(non_negative_u64),
-            session_id: normalize_optional_string(row.get::<_, Option<String>>(16)?),
-            provider_type: normalize_optional_string(row.get::<_, Option<String>>(17)?),
-            is_streaming: row.get::<_, i64>(18)? != 0,
-            error_message: normalize_optional_string(row.get::<_, Option<String>>(19)?),
-            data_source: normalize_optional_string(row.get::<_, Option<String>>(20)?),
-        })
-    })?;
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = match range {
+        Some((start, end)) => {
+            stmt.query_map(params![app_key, start, end, limit], usage_log_row_from_sql)?
+        }
+        None => stmt.query_map(params![app_key, limit], usage_log_row_from_sql)?,
+    };
 
     rows.collect::<Result<Vec<_>, _>>().map_err(AppError::from)
+}
+
+fn usage_log_row_from_sql(row: &rusqlite::Row<'_>) -> rusqlite::Result<UsageLogRow> {
+    Ok(UsageLogRow {
+        request_id: row.get(0)?,
+        created_at: row.get(1)?,
+        app_type: row.get(2)?,
+        provider_id: row.get(3)?,
+        provider_name: normalize_optional_string(row.get::<_, Option<String>>(4)?),
+        model: row.get(5)?,
+        request_model: normalize_optional_string(row.get::<_, Option<String>>(6)?),
+        status_code: clamp_u16(row.get::<_, i64>(7)?),
+        input_tokens: non_negative_u64(row.get::<_, i64>(8)?),
+        output_tokens: non_negative_u64(row.get::<_, i64>(9)?),
+        cache_read_tokens: non_negative_u64(row.get::<_, i64>(10)?),
+        cache_creation_tokens: non_negative_u64(row.get::<_, i64>(11)?),
+        total_cost_usd: row.get::<_, f64>(12)?.max(0.0),
+        latency_ms: non_negative_u64(row.get::<_, i64>(13)?),
+        first_token_ms: row.get::<_, Option<i64>>(14)?.map(non_negative_u64),
+        duration_ms: row.get::<_, Option<i64>>(15)?.map(non_negative_u64),
+        session_id: normalize_optional_string(row.get::<_, Option<String>>(16)?),
+        provider_type: normalize_optional_string(row.get::<_, Option<String>>(17)?),
+        is_streaming: row.get::<_, i64>(18)? != 0,
+        error_message: normalize_optional_string(row.get::<_, Option<String>>(19)?),
+        data_source: normalize_optional_string(row.get::<_, Option<String>>(20)?),
+    })
+}
+
+fn load_usage_logs_total(
+    conn: &rusqlite::Connection,
+    app_key: &str,
+    range: Option<(i64, i64)>,
+) -> Result<u64, AppError> {
+    let effective_filter = crate::services::usage_stats::effective_usage_log_filter("l");
+    let count = match range {
+        Some((start, end)) => conn.query_row(
+            &format!(
+                "SELECT COUNT(*)
+                 FROM proxy_request_logs l
+                 WHERE l.app_type = ?1
+                   AND l.created_at >= ?2
+                   AND l.created_at <= ?3
+                   AND {effective_filter}"
+            ),
+            params![app_key, start, end],
+            |row| row.get::<_, i64>(0),
+        )?,
+        None => conn.query_row(
+            &format!(
+                "SELECT COUNT(*)
+                 FROM proxy_request_logs l
+                 WHERE l.app_type = ?1
+                   AND {effective_filter}"
+            ),
+            params![app_key],
+            |row| row.get::<_, i64>(0),
+        )?,
+    };
+    Ok(non_negative_u64(count))
 }
 
 fn effective_total_tokens(
@@ -2401,7 +2784,7 @@ mod tests {
         assert_eq!(models[0].model, "gpt-5.4");
         assert_eq!(models[0].total_tokens, 600);
 
-        let recent_logs = load_usage_recent_logs(&conn, "codex", 10)?;
+        let recent_logs = load_usage_recent_logs(&conn, "codex", None, 10)?;
         assert_eq!(recent_logs.len(), 1);
         assert_eq!(
             recent_logs[0].provider_name.as_deref(),
@@ -2410,6 +2793,79 @@ mod tests {
         assert_eq!(recent_logs[0].total_tokens(), 1_250);
 
         Ok(())
+    }
+
+    #[test]
+    fn usage_custom_range_filters_recent_logs_and_total() -> Result<(), AppError> {
+        let db = crate::Database::memory()?;
+        let now = Local::now().timestamp();
+        let start = now - 60 * 60;
+        let conn = db.conn.lock().expect("lock memory db");
+
+        insert_usage_log(
+            &conn,
+            "codex-inside-range",
+            "codex",
+            "_codex_session",
+            "gpt-5.4",
+            now - 60,
+            100,
+            20,
+            0,
+            0,
+        )?;
+        insert_usage_log(
+            &conn,
+            "codex-outside-range",
+            "codex",
+            "_codex_session",
+            "gpt-5.4",
+            now - 2 * 60 * 60,
+            100,
+            20,
+            0,
+            0,
+        )?;
+
+        let range = Some((start, now));
+        let recent_logs = load_usage_recent_logs(&conn, "codex", range, 10)?;
+        assert_eq!(recent_logs.len(), 1);
+        assert_eq!(recent_logs[0].request_id, "codex-inside-range");
+        assert_eq!(load_usage_logs_total(&conn, "codex", range)?, 1);
+        assert_eq!(load_usage_logs_total(&conn, "codex", None)?, 2);
+
+        Ok(())
+    }
+
+    #[test]
+    fn parse_usage_custom_range_accepts_common_separators() {
+        for input in [
+            "2026-06-01..2026-06-05",
+            "2026-06-01 - 2026-06-05",
+            "2026-06-01 to 2026-06-05",
+            "2026-06-01,2026-06-05",
+            "2026-06-01，2026-06-05",
+            "2026-06-01 2026-06-05",
+        ] {
+            let range = parse_usage_custom_range(input).expect("range should parse");
+            assert_eq!(range.label(), "2026-06-01..2026-06-05");
+        }
+    }
+
+    #[test]
+    fn parse_usage_custom_range_rejects_invalid_ranges() {
+        for input in [
+            "",
+            "2026-06-01",
+            "2026/06/01..2026/06/05",
+            "2026-06-05..2026-06-01",
+            "2010-01-01..2025-01-01",
+        ] {
+            assert!(
+                parse_usage_custom_range(input).is_err(),
+                "{input} should be rejected"
+            );
+        }
     }
 
     #[test]

@@ -758,10 +758,11 @@ impl App {
         } else {
             self.usage.selected_idx = self.usage.selected_idx.min(usage_len - 1);
         }
-        if data.usage.recent_logs.is_empty() {
+        let usage_logs_len = data.usage.recent_logs_for(self.usage.range).len();
+        if usage_logs_len == 0 {
             self.usage.logs_idx = 0;
         } else {
-            self.usage.logs_idx = self.usage.logs_idx.min(data.usage.recent_logs.len() - 1);
+            self.usage.logs_idx = self.usage.logs_idx.min(usage_logs_len - 1);
         }
 
         let pricing_len = visible_pricing_rows(&self.filter, data).len();

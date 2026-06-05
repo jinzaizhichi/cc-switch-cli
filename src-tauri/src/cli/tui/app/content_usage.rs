@@ -55,6 +55,20 @@ impl App {
                 self.set_usage_range(data::UsageRangePreset::ThirtyDays, data);
                 Action::None
             }
+            KeyCode::Char('C') | KeyCode::Char('c') => {
+                let input = match self.usage.range {
+                    data::UsageRangePreset::Custom(range) => range.label(),
+                    _ => data::usage_custom_range_default_input(),
+                };
+                self.overlay = Overlay::TextInput(TextInputState {
+                    title: usage_custom_range_title().to_string(),
+                    prompt: usage_custom_range_prompt().to_string(),
+                    input: TextInput::new(input),
+                    submit: TextSubmit::UsageCustomRange,
+                    secret: false,
+                });
+                Action::None
+            }
             _ if is_backtab => {
                 self.usage.metric = self.usage.metric.previous();
                 Action::None
@@ -71,10 +85,12 @@ impl App {
                         .len()
                         .saturating_sub(1),
                 );
-                self.usage.logs_idx = self
-                    .usage
-                    .logs_idx
-                    .min(data.usage.recent_logs.len().saturating_sub(1));
+                self.usage.logs_idx = self.usage.logs_idx.min(
+                    data.usage
+                        .recent_logs_for(self.usage.range)
+                        .len()
+                        .saturating_sub(1),
+                );
                 self.push_route_and_switch(Route::UsageLogs)
             }
             KeyCode::Char('r') => Action::ReloadData,
@@ -128,7 +144,11 @@ impl App {
     }
 
     fn open_usage_log_detail_from_logs(&mut self, data: &UiData) -> Action {
-        let Some(row) = data.usage.recent_logs.get(self.usage.logs_idx) else {
+        let Some(row) = data
+            .usage
+            .recent_logs_for(self.usage.range)
+            .get(self.usage.logs_idx)
+        else {
             return Action::None;
         };
         self.push_route_and_switch(Route::UsageLogDetail {
@@ -156,14 +176,30 @@ impl App {
     fn move_usage_detail_selection(&mut self, data: &UiData, delta: isize) {
         match self.usage.pane {
             UsagePane::Recent => {
-                self.usage.logs_idx =
-                    move_index(self.usage.logs_idx, data.usage.recent_logs.len(), delta);
+                let len = data.usage.recent_logs_for(self.usage.range).len();
+                self.usage.logs_idx = move_index(self.usage.logs_idx, len, delta);
             }
             UsagePane::Models | UsagePane::Providers => {
                 let len = usage_active_pane_len(&self.usage.pane, self.usage.range, data);
                 self.usage.selected_idx = move_index(self.usage.selected_idx, len, delta);
             }
         }
+    }
+}
+
+fn usage_custom_range_title() -> &'static str {
+    if crate::cli::i18n::is_chinese() {
+        "自定义时间区间"
+    } else {
+        "Custom Range"
+    }
+}
+
+fn usage_custom_range_prompt() -> &'static str {
+    if crate::cli::i18n::is_chinese() {
+        "格式：YYYY-MM-DD..YYYY-MM-DD"
+    } else {
+        "Format: YYYY-MM-DD..YYYY-MM-DD"
     }
 }
 
@@ -175,7 +211,7 @@ pub(crate) fn usage_active_pane_len(
     match pane {
         UsagePane::Providers => data.usage.top_providers_for(range).len(),
         UsagePane::Models => data.usage.top_models_for(range).len(),
-        UsagePane::Recent => data.usage.recent_logs.len(),
+        UsagePane::Recent => data.usage.recent_logs_for(range).len(),
     }
 }
 

@@ -141,6 +141,7 @@ pub(crate) enum UsagePricingReq {
         generation: u64,
         app_state_epoch: u64,
         app_type: AppType,
+        range: crate::cli::tui::data::UsageRangePreset,
     },
     DropState {
         ack: mpsc::Sender<()>,
@@ -153,6 +154,7 @@ pub(crate) enum UsagePricingMsg {
         generation: u64,
         app_state_epoch: u64,
         app_type: AppType,
+        range: crate::cli::tui::data::UsageRangePreset,
         result: Result<crate::cli::tui::data::UsagePricingData, String>,
     },
 }
