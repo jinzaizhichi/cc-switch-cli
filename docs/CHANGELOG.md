@@ -7,6 +7,51 @@ All notable changes to CC Switch CLI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.8.2] - 2026-06-11
+
+### Added
+
+- **Providers / RunAPI**: Add a RunAPI sponsor preset for provider creation in the CLI and TUI, with matching README sponsor details.
+- **CI / Benchmarks**: Add a benchmark workflow and a blocking release benchmark gate so release tags fail before publishing if key TUI paths regress.
+- **Release Notes**: Enable GitHub-generated release notes so published releases show the Contributors section with avatars.
+
+### Changed
+
+- **TUI / Performance**: Improve startup responsiveness, provider refresh, and route-opening paths, with benchmark coverage for the flows that were tuned.
+- **Benchmarks / CI**: Stabilize benchmark provider selection, fail-fast behavior, and threshold reporting for release and CI runs.
+- **README / Release Metadata**: Refresh the README version badges for 5.8.2.
+
+### Fixed
+
+- **Codex / Reasoning Cache**: Restore cross-turn reasoning context for `custom_tool_call` and `tool_search_call`, matching the existing `function_call` handling and fixing missing reasoning errors from Kimi/Moonshot and DeepSeek. Fixes [#258](https://github.com/SaladDay/cc-switch-cli/issues/258). [#263](https://github.com/SaladDay/cc-switch-cli/pull/263)
+- **Codex / Model Catalog**: Write `model_catalog_json` as the relative file name `cc-switch-model-catalog.json`, matching Codex's own catalog references and keeping configs more portable. Fixes [#260](https://github.com/SaladDay/cc-switch-cli/issues/260). [#265](https://github.com/SaladDay/cc-switch-cli/pull/265)
+- **Codex / Sessions**: Scan `archived_sessions/` alongside active Codex sessions so archived sessions appear in the TUI and CLI session browser. Fixes [#260](https://github.com/SaladDay/cc-switch-cli/issues/260). [#265](https://github.com/SaladDay/cc-switch-cli/pull/265)
+- **Proxy / Daemon**: Preserve daemon worker runtime status when proxy state is refreshed.
+- **TUI / Tests**: Isolate header layout tests so UI assertions do not leak state between cases.
+
+### Commits (since v5.8.1)
+
+- 580af34d ci: include generated release contributors
+- c5d89ede fix(codex): generalize cross-turn reasoning cache to all tool call types (#263)
+- e84e5053 fix(codex): use relative filename for catalog path and include archived sessions (#265)
+- 6650f36d Gate releases with blocking benchmarks
+- 926994fa Stabilize TUI benchmark provider selection
+- 85f0558d Stabilize benchmark CI fail-fast
+- ae2d90c8 Add benchmark CI gate
+- 94a882d3 Fix header layout test isolation
+- 1ecfad44 Optimize TUI route open benchmarks
+- 7f8f0010 Optimize TUI provider refresh path
+- 7384434c Improve TUI startup responsiveness
+- 3d8e7c23 Update RunAPI sponsor readmes
+- 635964ca Add RunAPI sponsor preset
+- a56057e5 fix(proxy): preserve daemon worker runtime status
+
+### Thanks
+
+- Thanks `@thedavidweng` for reporting and fixing the Codex reasoning-cache gap, the relative model catalog path, and archived-session discovery in PRs [#263](https://github.com/SaladDay/cc-switch-cli/pull/263) and [#265](https://github.com/SaladDay/cc-switch-cli/pull/265).
+- Thanks `@SaladDay` for the TUI responsiveness work, benchmark release gate, RunAPI sponsor preset, daemon proxy-status fix, release notes integration, and release coordination.
+- Thanks to everyone who tested the 5.8.x line and helped keep the release path tight.
+
 ## [5.8.1] - 2026-06-07
 
 ### Added
