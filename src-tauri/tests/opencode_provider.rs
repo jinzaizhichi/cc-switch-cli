@@ -222,8 +222,22 @@ fn opencode_add_syncs_all_providers_to_live_config() {
     assert!(providers.contains_key("anthropic"));
 }
 
+fn assert_live_conflict(err: AppError, paths: &[&str]) {
+    let message = err.to_string();
+    assert!(
+        message.contains("Live configuration has conflicting local changes"),
+        "expected live conflict summary, got: {message}"
+    );
+    for path in paths {
+        assert!(
+            message.contains(path),
+            "expected conflict path {path}, got: {message}"
+        );
+    }
+}
+
 #[test]
-fn opencode_update_live_backed_provider_rewrites_live_config() {
+fn opencode_update_live_backed_provider_conflicts_on_changed_live_field() {
     let _guard = lock_test_mutex();
     reset_test_fs();
     let home = ensure_test_home();
@@ -251,11 +265,80 @@ fn opencode_update_live_backed_provider_rewrites_live_config() {
         serde_json::to_string_pretty(&json!({
             "$schema": "https://opencode.ai/config.json",
             "provider": {
-                "live-provider": opencode_provider(
-                    "live-provider",
-                    "Live Provider",
-                    "https://old.example.com/v1"
-                ).settings_config
+                "live-provider": {
+                    "npm": "@ai-sdk/openai-compatible",
+                    "options": {
+                        "baseURL": "https://local-edited.example.com/v1",
+                        "apiKey": "sk-live-provider"
+                    },
+                    "models": {
+                        "main": { "name": "Main" }
+                    }
+                }
+            }
+        }))
+        .expect("serialize opencode live config"),
+    )
+    .expect("seed opencode live config");
+
+    let state = state_from_config(config);
+    let err = ProviderService::update(
+        &state,
+        AppType::OpenCode,
+        opencode_provider(
+            "live-provider",
+            "Live Provider Updated",
+            "https://new.example.com/v1",
+        ),
+    )
+    .expect_err("changed live opencode field should conflict by default");
+    assert_live_conflict(err, &["options.baseURL"]);
+
+    let live = read_opencode_live(&opencode_path);
+    assert_eq!(
+        live["provider"]["live-provider"]["options"]["baseURL"],
+        json!("https://local-edited.example.com/v1")
+    );
+}
+
+#[test]
+fn opencode_update_live_backed_provider_preserves_live_deleted_field() {
+    let _guard = lock_test_mutex();
+    reset_test_fs();
+    let home = ensure_test_home();
+
+    let mut config = MultiAppConfig::default();
+    {
+        let manager = config
+            .get_manager_mut(&AppType::OpenCode)
+            .expect("opencode manager");
+        manager.providers.insert(
+            "live-provider".to_string(),
+            opencode_provider(
+                "live-provider",
+                "Live Provider",
+                "https://old.example.com/v1",
+            ),
+        );
+    }
+
+    let opencode_path = opencode_config_path(home);
+    std::fs::create_dir_all(opencode_path.parent().expect("opencode config dir"))
+        .expect("create opencode dir");
+    std::fs::write(
+        &opencode_path,
+        serde_json::to_string_pretty(&json!({
+            "$schema": "https://opencode.ai/config.json",
+            "provider": {
+                "live-provider": {
+                    "npm": "@ai-sdk/openai-compatible",
+                    "options": {
+                        "baseURL": "https://old.example.com/v1"
+                    },
+                    "models": {
+                        "main": { "name": "Main" }
+                    }
+                }
             }
         }))
         .expect("serialize opencode live config"),
@@ -272,13 +355,16 @@ fn opencode_update_live_backed_provider_rewrites_live_config() {
             "https://new.example.com/v1",
         ),
     )
-    .expect("updating live-backed opencode provider should rewrite live config");
+    .expect("update should preserve live deletion for unchanged incoming field");
 
     let live = read_opencode_live(&opencode_path);
     assert_eq!(
         live["provider"]["live-provider"]["options"]["baseURL"],
         json!("https://new.example.com/v1")
     );
+    assert!(live["provider"]["live-provider"]["options"]
+        .get("apiKey")
+        .is_none());
 }
 
 #[test]
