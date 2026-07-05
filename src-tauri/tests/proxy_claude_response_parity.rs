@@ -241,7 +241,8 @@ async fn response_prompt_tokens_details_cached_tokens_maps_to_cache_read_input_t
     }))
     .await;
 
-    assert_eq!(body["usage"]["input_tokens"], 100);
+    // input_tokens is fresh input: prompt_tokens(100) - cache_read(80) = 20.
+    assert_eq!(body["usage"]["input_tokens"], 20);
     assert_eq!(body["usage"]["output_tokens"], 50);
     assert_eq!(body["usage"]["cache_read_input_tokens"], 80);
 }
@@ -265,7 +266,8 @@ async fn response_direct_usage_cache_fields_match_upstream() {
     }))
     .await;
 
-    assert_eq!(body["usage"]["input_tokens"], 100);
+    // input_tokens is fresh input: prompt(100) - cache_read(60) - cache_creation(20) = 20.
+    assert_eq!(body["usage"]["input_tokens"], 20);
     assert_eq!(body["usage"]["output_tokens"], 50);
     assert_eq!(body["usage"]["cache_read_input_tokens"], 60);
     assert_eq!(body["usage"]["cache_creation_input_tokens"], 20);

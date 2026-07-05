@@ -452,12 +452,35 @@ pub(crate) fn clean_schema(mut schema: Value) -> Value {
 }
 
 /// Map an OpenAI-compatible `usage` object onto Anthropic usage fields.
+///
+/// OpenAI `prompt_tokens` is inclusive of cache hits, but Anthropic `input_tokens`
+/// is fresh input only. This path is billed as app_type="claude" (the cost calculator
+/// does NOT subtract cache again), so `cache_read` + `cache_creation` must be subtracted
+/// here — otherwise cached tokens would be counted both as input and in the cache buckets.
+/// The three buckets are mutually exclusive: input + cache_read + cache_creation ==
+/// prompt_tokens. Symmetric with the streaming path's `build_stream_usage_json`.
 fn openai_usage_to_anthropic(body: &Value) -> Value {
     let usage = body.get("usage").cloned().unwrap_or(json!({}));
+    // Direct `cache_read_input_tokens` field takes priority over nested cached_tokens.
+    let cached = usage
+        .get("cache_read_input_tokens")
+        .and_then(|v| v.as_u64())
+        .or_else(|| {
+            usage
+                .pointer("/prompt_tokens_details/cached_tokens")
+                .and_then(|v| v.as_u64())
+        })
+        .unwrap_or(0);
+    let cache_creation = usage
+        .get("cache_creation_input_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
     let input_tokens = usage
         .get("prompt_tokens")
         .and_then(|v| v.as_u64())
-        .unwrap_or(0) as u32;
+        .unwrap_or(0)
+        .saturating_sub(cached)
+        .saturating_sub(cache_creation) as u32;
     let output_tokens = usage
         .get("completion_tokens")
         .and_then(|v| v.as_u64())
@@ -468,17 +491,11 @@ fn openai_usage_to_anthropic(body: &Value) -> Value {
         "output_tokens": output_tokens
     });
 
-    if let Some(cached) = usage
-        .pointer("/prompt_tokens_details/cached_tokens")
-        .and_then(|v| v.as_u64())
-    {
+    if cached > 0 {
         usage_json["cache_read_input_tokens"] = json!(cached);
     }
-    if let Some(v) = usage.get("cache_read_input_tokens") {
-        usage_json["cache_read_input_tokens"] = v.clone();
-    }
-    if let Some(v) = usage.get("cache_creation_input_tokens") {
-        usage_json["cache_creation_input_tokens"] = v.clone();
+    if cache_creation > 0 {
+        usage_json["cache_creation_input_tokens"] = json!(cache_creation);
     }
 
     usage_json
@@ -1147,7 +1164,8 @@ mod tests {
         assert_eq!(result["model"], "z-ai/glm-5.2");
         assert_eq!(result["stop_reason"], "end_turn");
         assert_eq!(result["content"], json!([]));
-        assert_eq!(result["usage"]["input_tokens"], 13312);
+        // input_tokens is fresh input: prompt_tokens(13312) - cache_read(100) = 13212.
+        assert_eq!(result["usage"]["input_tokens"], 13212);
         assert_eq!(result["usage"]["output_tokens"], 79);
         assert_eq!(result["usage"]["cache_read_input_tokens"], 100);
     }

@@ -248,6 +248,24 @@ pub(crate) fn build_anthropic_usage_from_responses(usage: Option<&Value>) -> Val
         result["cache_creation_input_tokens"] = v.clone();
     }
 
+    // OpenAI/Responses input (prompt_tokens/input_tokens) is cache-inclusive; Anthropic
+    // input_tokens is fresh. This mapping is claude-billed only (Codex passthrough uses
+    // from_codex_response_*), so subtract cache_read + cache_creation to avoid counting
+    // cached tokens both as input and in the cache buckets. Buckets are mutually exclusive:
+    // input + cache_read + cache_creation == upstream input. Covers non-streaming and
+    // streaming (streaming_responses).
+    let cached = result
+        .get("cache_read_input_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let cache_creation = result
+        .get("cache_creation_input_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    if cached > 0 || cache_creation > 0 {
+        result["input_tokens"] = json!(input.saturating_sub(cached).saturating_sub(cache_creation));
+    }
+
     result
 }
 
@@ -725,6 +743,21 @@ mod tests {
 
         assert_eq!(result["input_tokens"], json!(100));
         assert_eq!(result["output_tokens"], json!(50));
+    }
+
+    #[test]
+    fn responses_usage_subtracts_cache_from_input() {
+        // input_tokens is cache-inclusive on the wire; Anthropic input_tokens must be
+        // fresh input (this path is billed as claude, which does not subtract cache again).
+        let result = build_anthropic_usage_from_responses(Some(&json!({
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "input_tokens_details": {"cached_tokens": 80}
+        })));
+
+        assert_eq!(result["input_tokens"], json!(20));
+        assert_eq!(result["output_tokens"], json!(50));
+        assert_eq!(result["cache_read_input_tokens"], json!(80));
     }
 
     #[test]

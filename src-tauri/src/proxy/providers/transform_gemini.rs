@@ -1101,7 +1101,7 @@ pub(crate) fn build_anthropic_usage(usage: Option<&Value>) -> Value {
         });
     };
 
-    let input_tokens = usage
+    let prompt_tokens = usage
         .get("promptTokenCount")
         .and_then(|value| value.as_u64())
         .unwrap_or(0);
@@ -1109,18 +1109,24 @@ pub(crate) fn build_anthropic_usage(usage: Option<&Value>) -> Value {
         .get("totalTokenCount")
         .and_then(|value| value.as_u64())
         .unwrap_or(0);
-    let output_tokens = total_tokens.saturating_sub(input_tokens);
+    let cached_tokens = usage
+        .get("cachedContentTokenCount")
+        .and_then(|value| value.as_u64())
+        .unwrap_or(0);
+    // Gemini promptTokenCount is cache-inclusive; Anthropic input_tokens must be fresh
+    // input with cache_read listed separately. This path is billed as app_type=claude
+    // (the cost calculator does NOT subtract cache again), so subtract cached here to
+    // avoid double billing. output stays total - prompt (the split only affects input).
+    let input_tokens = prompt_tokens.saturating_sub(cached_tokens);
+    let output_tokens = total_tokens.saturating_sub(prompt_tokens);
 
     let mut result = json!({
         "input_tokens": input_tokens,
         "output_tokens": output_tokens
     });
 
-    if let Some(cached) = usage
-        .get("cachedContentTokenCount")
-        .and_then(|value| value.as_u64())
-    {
-        result["cache_read_input_tokens"] = json!(cached);
+    if cached_tokens > 0 {
+        result["cache_read_input_tokens"] = json!(cached_tokens);
     }
 
     result
@@ -1370,7 +1376,8 @@ mod tests {
         assert_eq!(result["content"][0]["type"], "text");
         assert_eq!(result["content"][0]["text"], "Hello from Gemini");
         assert_eq!(result["stop_reason"], "end_turn");
-        assert_eq!(result["usage"]["input_tokens"], 12);
+        // fresh input: promptTokenCount(12) - cachedContentTokenCount(3) = 9.
+        assert_eq!(result["usage"]["input_tokens"], 9);
         assert_eq!(result["usage"]["output_tokens"], 8);
         assert_eq!(result["usage"]["cache_read_input_tokens"], 3);
     }

@@ -182,12 +182,21 @@ pub fn create_anthropic_sse_stream(
                                     "output_tokens": 0
                                 });
                                 if let Some(usage) = &chunk.usage {
-                                    start_usage["input_tokens"] = json!(usage.prompt_tokens);
-                                    if let Some(cached) = extract_cache_read_tokens(usage) {
+                                    // Subtract cache to report fresh input, mirroring
+                                    // build_stream_usage_json; output_tokens stays 0 at start.
+                                    let cached = extract_cache_read_tokens(usage).unwrap_or(0);
+                                    let cache_creation =
+                                        usage.cache_creation_input_tokens.unwrap_or(0);
+                                    start_usage["input_tokens"] = json!(usage
+                                        .prompt_tokens
+                                        .saturating_sub(cached)
+                                        .saturating_sub(cache_creation));
+                                    if cached > 0 {
                                         start_usage["cache_read_input_tokens"] = json!(cached);
                                     }
-                                    if let Some(created) = usage.cache_creation_input_tokens {
-                                        start_usage["cache_creation_input_tokens"] = json!(created);
+                                    if cache_creation > 0 {
+                                        start_usage["cache_creation_input_tokens"] =
+                                            json!(cache_creation);
                                     }
                                 }
 
@@ -688,16 +697,28 @@ pub fn create_anthropic_sse_stream(
 }
 
 /// Build the Anthropic `usage` object for a streamed OpenAI usage payload.
+///
+/// OpenAI `prompt_tokens` is inclusive of cache hits, but Anthropic `input_tokens` is
+/// fresh input only. This path is billed as app_type="claude" (the cost calculator does
+/// NOT subtract cache again), so `cache_read` + `cache_creation` are subtracted here to
+/// avoid counting cached tokens both as input and in the cache buckets. The three buckets
+/// are mutually exclusive: input + cache_read + cache_creation == prompt_tokens.
 fn build_stream_usage_json(usage: &Usage) -> serde_json::Value {
+    let cached = extract_cache_read_tokens(usage).unwrap_or(0);
+    let cache_creation = usage.cache_creation_input_tokens.unwrap_or(0);
+    let input_tokens = usage
+        .prompt_tokens
+        .saturating_sub(cached)
+        .saturating_sub(cache_creation);
     let mut usage_json = json!({
-        "input_tokens": usage.prompt_tokens,
+        "input_tokens": input_tokens,
         "output_tokens": usage.completion_tokens
     });
-    if let Some(cached) = extract_cache_read_tokens(usage) {
+    if cached > 0 {
         usage_json["cache_read_input_tokens"] = json!(cached);
     }
-    if let Some(created) = usage.cache_creation_input_tokens {
-        usage_json["cache_creation_input_tokens"] = json!(created);
+    if cache_creation > 0 {
+        usage_json["cache_creation_input_tokens"] = json!(cache_creation);
     }
     usage_json
 }
@@ -856,7 +877,8 @@ mod tests {
             .find(|event| event["type"] == "message_delta")
             .expect("message_delta event");
 
-        assert_eq!(message_start["message"]["usage"]["input_tokens"], 12);
+        // input_tokens is fresh input (cache subtracted): 12 - cache_read(5) - creation(2) = 5.
+        assert_eq!(message_start["message"]["usage"]["input_tokens"], 5);
         assert_eq!(message_start["message"]["usage"]["output_tokens"], 0);
         assert_eq!(
             message_start["message"]["usage"]["cache_read_input_tokens"],
@@ -867,7 +889,8 @@ mod tests {
             2
         );
 
-        assert_eq!(message_delta["usage"]["input_tokens"], 12);
+        // 12 - cache_read(6) - cache_creation(3) = 3.
+        assert_eq!(message_delta["usage"]["input_tokens"], 3);
         assert_eq!(message_delta["usage"]["output_tokens"], 7);
         assert_eq!(message_delta["usage"]["cache_read_input_tokens"], 6);
         assert_eq!(message_delta["usage"]["cache_creation_input_tokens"], 3);
@@ -965,7 +988,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn streaming_usage_preserves_zero_cached_tokens() {
+    async fn streaming_usage_omits_zero_cache_fields() {
+        // Upstream parity: a zero cache bucket is omitted rather than emitted as 0, and
+        // with no cache hit input_tokens equals prompt_tokens (nothing to subtract).
         let input = concat!(
             "data: {\"id\":\"chatcmpl_1\",\"model\":\"gpt-4o\",\"choices\":[{\"delta\":{}}],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":0,\"prompt_tokens_details\":{\"cached_tokens\":0}}}\n\n",
             "data: {\"id\":\"chatcmpl_1\",\"model\":\"gpt-4o\",\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":7}}\n\n",
@@ -978,10 +1003,10 @@ mod tests {
             .find(|event| event["type"] == "message_start")
             .expect("message_start event");
 
-        assert_eq!(
-            message_start["message"]["usage"]["cache_read_input_tokens"],
-            0
-        );
+        assert_eq!(message_start["message"]["usage"]["input_tokens"], 12);
+        assert!(message_start["message"]["usage"]
+            .get("cache_read_input_tokens")
+            .is_none());
     }
 
     #[tokio::test]
