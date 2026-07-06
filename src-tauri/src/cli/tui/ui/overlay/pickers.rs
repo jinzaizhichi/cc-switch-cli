@@ -1,5 +1,6 @@
 use super::super::theme;
 use super::super::*;
+use super::frame::{overlay_frame, overlay_frame_at, OverlaySize};
 use crate::cli::tui::form::{HermesModelField, ProviderAddFormState};
 use crate::cli::tui::text_edit::TextInput;
 
@@ -22,27 +23,6 @@ pub(super) fn render_claude_model_picker_overlay(
         y: content_area.y + content_area.height.saturating_sub(desired_h) / 2,
         height: desired_h,
     };
-    frame.render_widget(Clear, area);
-
-    let outer = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Plain)
-        .border_style(overlay_border_style(theme, false))
-        .title(format!(
-            " {} ",
-            texts::tui_claude_model_config_popup_title()
-        ));
-    frame.render_widget(outer.clone(), area);
-    let inner = outer.inner(area);
-
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Min(0),
-            Constraint::Length(3),
-        ])
-        .split(inner);
 
     let key_items: Vec<(&str, &str)> = if editing {
         vec![
@@ -58,9 +38,23 @@ pub(super) fn render_claude_model_picker_overlay(
             ("Esc", texts::tui_key_close()),
         ]
     };
-    render_key_bar_center(frame, chunks[0], theme, &key_items);
 
-    let body_area = inset_top(chunks[1], 1);
+    let body = overlay_frame_at(
+        frame,
+        area,
+        theme,
+        texts::tui_claude_model_config_popup_title(),
+        &key_items,
+        overlay_border_style(theme, false),
+    );
+
+    // Split the body into the model table and a fixed hint/input box at the bottom.
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(3)])
+        .split(body);
+    let body_area = chunks[0];
+    let hint_area = chunks[1];
 
     if let Some(FormState::ProviderAdd(provider)) = app.form.as_ref() {
         let labels = [
@@ -125,8 +119,8 @@ pub(super) fn render_claude_model_picker_overlay(
             } else {
                 texts::tui_form_input_title()
             });
-        frame.render_widget(hint_block.clone(), chunks[2]);
-        let hint_inner = hint_block.inner(chunks[2]);
+        frame.render_widget(hint_block.clone(), hint_area);
+        let hint_inner = hint_block.inner(hint_area);
 
         if editing {
             if let Some(input) = provider.claude_model_input(selected) {
@@ -193,43 +187,23 @@ pub(super) fn render_claude_api_format_picker_overlay(
     let choices = crate::cli::tui::form::ClaudeApiFormat::choices_for_app(&app_type);
 
     // Size the height to the option rows so there is no large gap below them:
-    // borders(2) + key bar(1) + top/bottom gap(2) + one row per choice.
+    // borders(2) + key bar(1) + gap(1) + one row per choice + bottom margin.
     let height = (choices.len() as u16)
         .saturating_add(5)
         .min(content_area.height);
-    let area = centered_rect_fixed(58, height, content_area);
-    frame.render_widget(Clear, area);
-
-    let outer = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Plain)
-        .border_style(overlay_border_style(theme, false))
-        .title(format!(" {} ", texts::tui_claude_api_format_popup_title()));
-    frame.render_widget(outer.clone(), area);
-    let inner = outer.inner(area);
-
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(0)])
-        .split(inner);
-
-    render_key_bar_center(
+    let body_area = overlay_frame_at(
         frame,
-        chunks[0],
+        centered_rect_fixed(58, height, content_area),
         theme,
+        texts::tui_claude_api_format_popup_title(),
         &[
             ("↑↓", texts::tui_key_select()),
             ("Enter", texts::tui_key_apply()),
             ("Esc", texts::tui_key_close()),
         ],
+        overlay_border_style(theme, false),
     );
 
-    let body_area = Rect {
-        x: chunks[1].x.saturating_add(2),
-        y: chunks[1].y.saturating_add(1),
-        width: chunks[1].width.saturating_sub(4),
-        height: chunks[1].height.saturating_sub(2),
-    };
     let items = choices.iter().copied().map(|api_format| {
         let marker = if api_format == current {
             texts::tui_marker_active()
@@ -260,63 +234,51 @@ pub(super) fn render_usage_query_template_picker_overlay(
     theme: &theme::Theme,
     selected: usize,
 ) {
-    let area = centered_rect_fixed(42, 10, content_area);
-    frame.render_widget(Clear, area);
+    let options = match app.form.as_ref() {
+        Some(FormState::ProviderAdd(provider)) => provider.available_usage_query_templates(),
+        _ => Vec::new(),
+    };
 
-    let outer = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Plain)
-        .border_style(overlay_border_style(theme, false))
-        .title(format!(" {} ", texts::tui_usage_query_template()));
-    frame.render_widget(outer.clone(), area);
-    let inner = outer.inner(area);
-
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(0)])
-        .split(inner);
-
-    render_key_bar_center(
+    let body_area = overlay_frame(
         frame,
-        chunks[0],
+        content_area,
         theme,
+        texts::tui_usage_query_template(),
         &[
             ("↑↓", texts::tui_key_select()),
             ("Enter", texts::tui_key_apply()),
             ("Esc", texts::tui_key_close()),
         ],
+        OverlaySize::FitRows {
+            width: 42,
+            body_rows: options.len() as u16,
+        },
+        overlay_border_style(theme, false),
     );
 
-    let body_area = Rect {
-        x: chunks[1].x.saturating_add(2),
-        y: chunks[1].y.saturating_add(1),
-        width: chunks[1].width.saturating_sub(4),
-        height: chunks[1].height.saturating_sub(2),
+    let Some(FormState::ProviderAdd(provider)) = app.form.as_ref() else {
+        return;
     };
+    let current = provider.usage_query_template;
+    let items = options.iter().map(|template| {
+        let marker = if *template == current {
+            texts::tui_marker_active()
+        } else {
+            texts::tui_marker_inactive()
+        };
+        ListItem::new(Line::from(Span::raw(format!(
+            "{marker}  {}",
+            template.label()
+        ))))
+    });
 
-    if let Some(FormState::ProviderAdd(provider)) = app.form.as_ref() {
-        let current = provider.usage_query_template;
-        let options = provider.available_usage_query_templates();
-        let items = options.iter().map(|template| {
-            let marker = if *template == current {
-                texts::tui_marker_active()
-            } else {
-                texts::tui_marker_inactive()
-            };
-            ListItem::new(Line::from(Span::raw(format!(
-                "{marker}  {}",
-                template.label()
-            ))))
-        });
+    let list = List::new(items)
+        .highlight_style(selection_style(theme))
+        .highlight_symbol(highlight_symbol(theme));
 
-        let list = List::new(items)
-            .highlight_style(selection_style(theme))
-            .highlight_symbol(highlight_symbol(theme));
-
-        let mut state = ListState::default();
-        state.select(Some(selected.min(options.len().saturating_sub(1))));
-        frame.render_stateful_widget(list, body_area, &mut state);
-    }
+    let mut state = ListState::default();
+    state.select(Some(selected.min(options.len().saturating_sub(1))));
+    frame.render_stateful_widget(list, body_area, &mut state);
 }
 
 pub(super) fn render_managed_account_picker_overlay(
@@ -335,34 +297,20 @@ pub(super) fn render_managed_account_picker_overlay(
         .unwrap_or(0)
         .saturating_add(if binding { 6 } else { 5 })
         .min(18) as u16;
-    let area = centered_rect_fixed(62, height.max(8), content_area);
-    frame.render_widget(Clear, area);
 
-    let outer = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Plain)
-        .border_style(overlay_border_style(theme, false))
-        .title(format!(" {} ", texts::tui_label_chatgpt_account()));
-    frame.render_widget(outer.clone(), area);
-    let inner = outer.inner(area);
-
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(0)])
-        .split(inner);
-
-    render_key_bar_center(
+    let body_area = overlay_frame_at(
         frame,
-        chunks[0],
+        centered_rect_fixed(62, height.max(8), content_area),
         theme,
+        texts::tui_label_chatgpt_account(),
         &[
             ("↑↓", texts::tui_key_select()),
             ("Enter", texts::tui_key_apply()),
             ("Esc", texts::tui_key_close()),
         ],
+        overlay_border_style(theme, false),
     );
 
-    let body_area = inset_top(chunks[1], 1);
     let Some(status) = app.managed_auth_status.as_ref() else {
         frame.render_widget(
             Paragraph::new(Line::styled(
@@ -434,9 +382,6 @@ pub(super) fn render_managed_account_action_picker_overlay(
     account_id: &str,
     selected: usize,
 ) {
-    let area = centered_rect_fixed(48, 8, content_area);
-    frame.render_widget(Clear, area);
-
     let account_label = app
         .managed_auth_status
         .as_ref()
@@ -449,42 +394,37 @@ pub(super) fn render_managed_account_action_picker_overlay(
         })
         .unwrap_or(account_id);
 
-    let outer = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Plain)
-        .border_style(overlay_border_style(theme, false))
-        .title(format!(" {} ", account_label));
-    frame.render_widget(outer.clone(), area);
-    let inner = outer.inner(area);
+    let actions = [
+        texts::tui_key_set_default().to_string(),
+        texts::tui_key_delete().to_string(),
+    ];
 
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(0)])
-        .split(inner);
-
-    render_key_bar_center(
+    let body = overlay_frame(
         frame,
-        chunks[0],
+        content_area,
         theme,
+        account_label,
         &[
             ("↑↓", texts::tui_key_select()),
             ("Enter", texts::tui_key_apply()),
             ("Esc", texts::tui_key_close()),
         ],
+        OverlaySize::FitRows {
+            width: 48,
+            body_rows: actions.len() as u16,
+        },
+        overlay_border_style(theme, false),
     );
 
-    let items = [
-        texts::tui_key_set_default().to_string(),
-        texts::tui_key_delete().to_string(),
-    ]
-    .into_iter()
-    .map(|label| ListItem::new(Line::raw(label)));
+    let items = actions
+        .into_iter()
+        .map(|label| ListItem::new(Line::raw(label)));
     let list = List::new(items)
         .highlight_style(selection_style(theme))
         .highlight_symbol(highlight_symbol(theme));
     let mut state = ListState::default();
     state.select(Some(selected.min(1)));
-    frame.render_stateful_widget(list, inset_top(chunks[1], 1), &mut state);
+    frame.render_stateful_widget(list, body, &mut state);
 }
 
 pub(super) fn render_provider_test_menu_overlay(
@@ -496,36 +436,28 @@ pub(super) fn render_provider_test_menu_overlay(
     _provider_id: &str,
     selected: usize,
 ) {
-    let area = centered_rect_fixed(50, 8, content_area);
-    frame.render_widget(Clear, area);
+    let menu_items = app::provider_test_menu_items(&app.app_type);
 
-    let outer = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Plain)
-        .border_style(overlay_border_style(theme, false))
-        .title(format!(" {} ", texts::tui_provider_test_menu_title()));
-    frame.render_widget(outer.clone(), area);
-    let inner = outer.inner(area);
-
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(0)])
-        .split(inner);
-
-    render_key_bar_center(
+    let body_area = overlay_frame(
         frame,
-        chunks[0],
+        content_area,
         theme,
+        texts::tui_provider_test_menu_title(),
         &[
             ("↑↓", texts::tui_key_select()),
             ("Enter", texts::tui_key_apply()),
             ("Esc", texts::tui_key_close()),
         ],
+        OverlaySize::FitRows {
+            width: 50,
+            body_rows: menu_items.len() as u16,
+        },
+        overlay_border_style(theme, false),
     );
 
-    let body_area = inset_top(chunks[1], 1);
-    let items = app::provider_test_menu_items(&app.app_type)
-        .into_iter()
+    let items = menu_items
+        .iter()
+        .copied()
         .map(|item| ListItem::new(Line::raw(app::provider_test_menu_item_label(item))));
 
     let list = List::new(items)
@@ -533,13 +465,7 @@ pub(super) fn render_provider_test_menu_overlay(
         .highlight_symbol(highlight_symbol(theme));
 
     let mut state = ListState::default();
-    state.select(Some(
-        selected.min(
-            app::provider_test_menu_items(&app.app_type)
-                .len()
-                .saturating_sub(1),
-        ),
-    ));
+    state.select(Some(selected.min(menu_items.len().saturating_sub(1))));
     frame.render_stateful_widget(list, body_area, &mut state);
 }
 
@@ -550,30 +476,9 @@ pub(super) fn render_hermes_models_picker_overlay(
     theme: &theme::Theme,
     editing: bool,
 ) {
-    let area = centered_rect_fixed(86, 24, content_area);
-    frame.render_widget(Clear, area);
-
     let Some(FormState::ProviderAdd(provider)) = app.form.as_ref() else {
         return;
     };
-
-    let outer = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Plain)
-        .border_style(overlay_border_style(theme, false))
-        .title(texts::tui_hermes_models_title(provider.name.value.trim()));
-    frame.render_widget(outer.clone(), area);
-    let inner = outer.inner(area);
-
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Min(0),
-            Constraint::Length(2),
-            Constraint::Length(3),
-        ])
-        .split(inner);
 
     let key_items: Vec<(&str, &str)> = if editing {
         vec![
@@ -590,7 +495,27 @@ pub(super) fn render_hermes_models_picker_overlay(
             ("Esc", texts::tui_key_close()),
         ]
     };
-    render_key_bar_center(frame, chunks[0], theme, &key_items);
+
+    // +1 row over the historic height (24 -> 25) compensates for the frame's
+    // gap row so the model table keeps its full 16-row capacity.
+    let title = texts::tui_hermes_models_title(provider.name.value.trim());
+    let body = overlay_frame_at(
+        frame,
+        centered_rect_fixed(86, 25, content_area),
+        theme,
+        &title,
+        &key_items,
+        overlay_border_style(theme, false),
+    );
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Min(0),
+            Constraint::Length(2),
+            Constraint::Length(3),
+        ])
+        .split(body);
 
     let fields = provider.hermes_model_fields();
     if fields.is_empty() {
@@ -601,7 +526,7 @@ pub(super) fn render_hermes_models_picker_overlay(
             ))
             .alignment(Alignment::Center)
             .wrap(Wrap { trim: true }),
-            inset_top(chunks[1], 1),
+            chunks[0],
         );
     } else {
         let rows_data = fields
@@ -655,7 +580,7 @@ pub(super) fn render_hermes_models_picker_overlay(
         state.select(Some(hermes_model_visual_row_index(
             provider.hermes_models_field_idx.min(fields.len() - 1),
         )));
-        frame.render_stateful_widget(table, chunks[1], &mut state);
+        frame.render_stateful_widget(table, chunks[0], &mut state);
     }
 
     let footer = if provider.hermes_models.is_empty() {
@@ -666,10 +591,10 @@ pub(super) fn render_hermes_models_picker_overlay(
     frame.render_widget(
         Paragraph::new(Line::styled(footer, Style::default().fg(theme.dim)))
             .wrap(Wrap { trim: true }),
-        chunks[2],
+        chunks[1],
     );
 
-    render_hermes_model_picker_input(frame, provider, chunks[3], theme, editing);
+    render_hermes_model_picker_input(frame, provider, chunks[2], theme, editing);
 }
 
 fn hermes_model_visual_row_index(field_idx: usize) -> usize {
@@ -774,24 +699,24 @@ pub(super) fn render_model_fetch_picker_overlay(
     error: Option<&str>,
     selected_idx: usize,
 ) {
-    let area = centered_rect_fixed(OVERLAY_FIXED_LG.0, OVERLAY_FIXED_LG.1, content_area);
-    frame.render_widget(Clear, area);
-
-    let outer = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Plain)
-        .border_style(overlay_border_style(theme, false))
-        .title(format!(
-            " {} ",
-            texts::tui_model_fetch_popup_title(fetching)
-        ));
-    frame.render_widget(outer.clone(), area);
-    let inner = outer.inner(area);
+    let title = texts::tui_model_fetch_popup_title(fetching);
+    let body = overlay_frame_at(
+        frame,
+        centered_rect_fixed(OVERLAY_FIXED_LG.0, OVERLAY_FIXED_LG.1, content_area),
+        theme,
+        &title,
+        &[
+            ("↑↓", texts::tui_key_select()),
+            ("Enter", texts::tui_key_apply()),
+            ("Esc", texts::tui_key_close()),
+        ],
+        overlay_border_style(theme, false),
+    );
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(3), Constraint::Min(0)])
-        .split(inner);
+        .split(body);
 
     let input_block = Block::default()
         .borders(Borders::ALL)
@@ -888,22 +813,6 @@ pub(super) fn render_openclaw_agents_fallback_picker_overlay(
     selected: usize,
     options: &[app::OpenClawModelOption],
 ) {
-    let area = centered_rect_fixed(OVERLAY_FIXED_LG.0, 12, content_area);
-    frame.render_widget(Clear, area);
-
-    let outer = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Plain)
-        .border_style(overlay_border_style(theme, false))
-        .title(format!(" {} ", openclaw_agents_picker_title(app)));
-    frame.render_widget(outer.clone(), area);
-    let inner = outer.inner(area);
-
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(0)])
-        .split(inner);
-
     let has_selection = selected != app::OPENCLAW_AGENTS_MODEL_PICKER_NONE;
     let key_items = if has_selection {
         vec![
@@ -917,9 +826,18 @@ pub(super) fn render_openclaw_agents_fallback_picker_overlay(
             ("Esc", texts::tui_key_cancel()),
         ]
     };
-    render_key_bar_center(frame, chunks[0], theme, &key_items);
 
-    let body_area = inset_top(chunks[1], 1);
+    // The fallback list can be long, so keep a fixed height and let it scroll.
+    let body_area = overlay_frame(
+        frame,
+        content_area,
+        theme,
+        openclaw_agents_picker_title(app),
+        &key_items,
+        OverlaySize::Fixed(OVERLAY_FIXED_LG.0, 12),
+        overlay_border_style(theme, false),
+    );
+
     let current_value = openclaw_agents_picker_current_value(app);
     let items = options.iter().map(|option| {
         let marker = if current_value == Some(option.value.as_str()) {
@@ -977,22 +895,6 @@ pub(super) fn render_openclaw_tools_profile_picker_overlay(
     theme: &theme::Theme,
     selected: Option<usize>,
 ) {
-    let area = centered_rect_fixed(58, 12, content_area);
-    frame.render_widget(Clear, area);
-
-    let outer = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Plain)
-        .border_style(overlay_border_style(theme, false))
-        .title(texts::tui_openclaw_tools_profile_block_title());
-    frame.render_widget(outer.clone(), area);
-    let inner = outer.inner(area);
-
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(0)])
-        .split(inner);
-
     let key_items = if selected.is_some() {
         vec![
             ("↑↓", texts::tui_key_select()),
@@ -1005,9 +907,20 @@ pub(super) fn render_openclaw_tools_profile_picker_overlay(
             ("Esc", texts::tui_key_cancel()),
         ]
     };
-    render_key_bar_center(frame, chunks[0], theme, &key_items);
 
-    let body_area = inset_top(chunks[1], 1);
+    let body_area = overlay_frame(
+        frame,
+        content_area,
+        theme,
+        texts::tui_openclaw_tools_profile_block_title(),
+        &key_items,
+        OverlaySize::FitRows {
+            width: 58,
+            body_rows: app::OPENCLAW_TOOLS_PROFILE_PICKER_LEN as u16,
+        },
+        overlay_border_style(theme, false),
+    );
+
     let current = app
         .openclaw_tools_form
         .as_ref()
@@ -1044,31 +957,11 @@ pub(super) fn render_failover_queue_manager_overlay(
     theme: &theme::Theme,
     selected: usize,
 ) {
-    let area = centered_rect_fixed(OVERLAY_FIXED_LG.0, 16, content_area);
-    frame.render_widget(Clear, area);
-
-    let outer = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Plain)
-        .border_style(overlay_border_style(theme, false))
-        .title(format!(" {} ", crate::t!("Failover Queue", "故障转移队列")));
-    frame.render_widget(outer.clone(), area);
-    let inner = outer.inner(area);
-
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Min(0),
-            Constraint::Length(2),
-        ])
-        .split(inner);
-
-    render_key_bar_center(
+    let body = overlay_frame_at(
         frame,
-        chunks[0],
+        centered_rect_fixed(OVERLAY_FIXED_LG.0, 16, content_area),
         theme,
+        crate::t!("Failover Queue", "故障转移队列"),
         // The overlay is fixed at 70 cols; keep these chips short enough
         // that the reorder hint always fits (Enter still toggles as a
         // hidden Space alias).
@@ -1079,7 +972,17 @@ pub(super) fn render_failover_queue_manager_overlay(
             ("</>/K/J", texts::tui_key_move()),
             ("Esc", texts::tui_key_close()),
         ],
+        overlay_border_style(theme, false),
     );
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(0),
+            Constraint::Length(2),
+        ])
+        .split(body);
 
     let status = if data.proxy.auto_failover_enabled {
         crate::t!("Automatic failover: enabled", "自动故障转移：已开启")
@@ -1090,10 +993,10 @@ pub(super) fn render_failover_queue_manager_overlay(
         Paragraph::new(status)
             .style(Style::default().fg(theme.dim))
             .alignment(Alignment::Center),
-        chunks[1],
+        chunks[0],
     );
 
-    let body_area = inset_top(chunks[2], 1);
+    let body_area = chunks[1];
     let rows = app::failover_queue_rows(data);
     if rows.is_empty() {
         frame.render_widget(
@@ -1164,7 +1067,7 @@ pub(super) fn render_failover_queue_manager_overlay(
         .style(Style::default().fg(theme.dim))
         .alignment(Alignment::Center)
         .wrap(Wrap { trim: false }),
-        chunks[3],
+        chunks[2],
     );
 }
 
@@ -1200,48 +1103,39 @@ pub(super) fn render_mcp_type_picker_overlay(
     theme: &theme::Theme,
     selected: usize,
 ) {
-    let area = centered_rect_fixed(58, 8, content_area);
-    frame.render_widget(Clear, area);
+    let transports = [
+        crate::cli::tui::form::McpTransport::Stdio,
+        crate::cli::tui::form::McpTransport::Http,
+        crate::cli::tui::form::McpTransport::Sse,
+    ];
 
-    let outer = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Plain)
-        .border_style(overlay_border_style(theme, false))
-        .title(format!(" {} ", texts::tui_mcp_type_title()));
-    frame.render_widget(outer.clone(), area);
-    let inner = outer.inner(area);
-
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(0)])
-        .split(inner);
-
-    render_key_bar_center(
+    let body_area = overlay_frame(
         frame,
-        chunks[0],
+        content_area,
         theme,
+        texts::tui_mcp_type_title(),
         &[
             ("↑↓", texts::tui_key_select()),
             ("Enter", texts::tui_key_apply()),
             ("Esc", texts::tui_key_cancel()),
         ],
+        OverlaySize::FitRows {
+            width: 58,
+            body_rows: transports.len() as u16,
+        },
+        overlay_border_style(theme, false),
     );
 
-    let body_area = inset_top(chunks[1], 1);
-    let items = [
-        crate::cli::tui::form::McpTransport::Stdio,
-        crate::cli::tui::form::McpTransport::Http,
-        crate::cli::tui::form::McpTransport::Sse,
-    ]
-    .iter()
-    .map(|transport| ListItem::new(Line::raw(transport.label())));
+    let items = transports
+        .iter()
+        .map(|transport| ListItem::new(Line::raw(transport.label())));
 
     let list = List::new(items)
         .highlight_style(selection_style(theme))
         .highlight_symbol(highlight_symbol(theme));
 
     let mut state = ListState::default();
-    state.select(Some(selected.min(2)));
+    state.select(Some(selected.min(transports.len().saturating_sub(1))));
     frame.render_stateful_widget(list, body_area, &mut state);
 }
 
@@ -1305,51 +1199,33 @@ pub(super) fn render_skills_import_picker_overlay(
     selected_idx: usize,
     selected: &std::collections::HashSet<String>,
 ) {
-    let area = centered_rect_fixed(OVERLAY_FIXED_LG.0, OVERLAY_FIXED_LG.1, content_area);
-    frame.render_widget(Clear, area);
-
-    let outer = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Plain)
-        .border_style(overlay_border_style(theme, true))
-        .title(format!(" {} ", texts::tui_skills_import_title()))
-        .style(if theme.no_color {
-            Style::default()
-        } else {
-            Style::default().bg(theme.surface)
-        });
-    frame.render_widget(outer.clone(), area);
-    let inner = outer.inner(area);
-
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Length(2),
-            Constraint::Min(0),
-        ])
-        .split(inner);
-
-    render_key_bar_center(
+    let body = overlay_frame_at(
         frame,
-        chunks[0],
+        centered_rect_fixed(OVERLAY_FIXED_LG.0, OVERLAY_FIXED_LG.1, content_area),
         theme,
+        texts::tui_skills_import_title(),
         &[
             ("Space", texts::tui_key_select()),
             ("Enter", texts::tui_key_import()),
             ("r", texts::tui_key_refresh()),
             ("Esc", texts::tui_key_close()),
         ],
+        overlay_border_style(theme, true),
     );
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(2), Constraint::Min(0)])
+        .split(body);
 
     frame.render_widget(
         Paragraph::new(texts::tui_skills_import_description())
             .style(Style::default().fg(theme.dim))
             .wrap(Wrap { trim: false }),
-        chunks[1],
+        chunks[0],
     );
 
-    let body_area = inset_top(chunks[2], 1);
+    let body_area = chunks[1];
     if skills.is_empty() {
         frame.render_widget(
             Paragraph::new(texts::tui_skills_unmanaged_empty())
@@ -1404,40 +1280,30 @@ pub(super) fn render_skills_sync_method_picker_overlay(
     theme: &theme::Theme,
     selected: usize,
 ) {
-    let area = centered_rect_fixed(OVERLAY_FIXED_LG.0, 12, content_area);
-    frame.render_widget(Clear, area);
-
-    let outer = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Plain)
-        .border_style(overlay_border_style(theme, false))
-        .title(format!(" {} ", texts::tui_skills_sync_method_title()));
-    frame.render_widget(outer.clone(), area);
-    let inner = outer.inner(area);
-
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(0)])
-        .split(inner);
-
-    render_key_bar_center(
-        frame,
-        chunks[0],
-        theme,
-        &[
-            ("←→", texts::tui_key_select()),
-            ("Enter", texts::tui_key_apply()),
-            ("Esc", texts::tui_key_cancel()),
-        ],
-    );
-
-    let body_area = inset_top(chunks[1], 1);
-    let current = data.skills.sync_method;
     let methods = [
         crate::services::skill::SyncMethod::Auto,
         crate::services::skill::SyncMethod::Symlink,
         crate::services::skill::SyncMethod::Copy,
     ];
+
+    let body_area = overlay_frame(
+        frame,
+        content_area,
+        theme,
+        texts::tui_skills_sync_method_title(),
+        &[
+            ("←→", texts::tui_key_select()),
+            ("Enter", texts::tui_key_apply()),
+            ("Esc", texts::tui_key_cancel()),
+        ],
+        OverlaySize::FitRows {
+            width: OVERLAY_FIXED_LG.0,
+            body_rows: methods.len() as u16,
+        },
+        overlay_border_style(theme, false),
+    );
+
+    let current = data.skills.sync_method;
 
     let items = methods.into_iter().map(|method| {
         let marker = if method == current {
@@ -1476,34 +1342,23 @@ fn render_apps_picker_overlay<A>(
 ) where
     A: AppToggleState,
 {
-    let area = centered_rect_fixed(OVERLAY_FIXED_LG.0, 12, content_area);
-    frame.render_widget(Clear, area);
-
-    let outer = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Plain)
-        .border_style(overlay_border_style(theme, false))
-        .title(format!(" {} ", title));
-    frame.render_widget(outer.clone(), area);
-    let inner = outer.inner(area);
-
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(0)])
-        .split(inner);
-
-    render_key_bar_center(
+    let body_area = overlay_frame(
         frame,
-        chunks[0],
+        content_area,
         theme,
+        &title,
         &[
             (toggle_key_label, texts::tui_key_toggle()),
             ("Enter", texts::tui_key_apply()),
             ("Esc", texts::tui_key_cancel()),
         ],
+        OverlaySize::FitRows {
+            width: OVERLAY_FIXED_LG.0,
+            body_rows: app_types.len() as u16,
+        },
+        overlay_border_style(theme, false),
     );
 
-    let body_area = inset_top(chunks[1], 1);
     let items = app_types.iter().map(|app_type| {
         let marker = if apps.is_enabled_for(app_type) {
             texts::tui_marker_active()
