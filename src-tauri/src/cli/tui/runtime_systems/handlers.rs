@@ -114,16 +114,27 @@ pub(crate) fn handle_session_msg(app: &mut App, msg: SessionMsg) {
                     let visible_len = crate::cli::tui::app::visible_sessions_for_state(
                         &app.filter,
                         &app.app_type,
+                        app.sessions.show_all_providers,
                         &app.sessions.rows,
                         app.sessions.detail_key.as_deref(),
                         app.sessions.messages_loaded,
                         &app.sessions.messages,
+                        app.sessions.deep_search_query.as_deref(),
+                        &app.sessions.deep_search_results,
                     )
                     .len();
                     if visible_len == 0 {
                         app.sessions.selected_idx = 0;
                     } else {
                         app.sessions.selected_idx = app.sessions.selected_idx.min(visible_len - 1);
+                    }
+                    // If a deep search is active, the freshly-scanned rows may
+                    // contain sessions the previous search snapshot missed (e.g.
+                    // the scan was still in flight when the search fired, or the
+                    // user entered "all providers" mode). Re-run the search over
+                    // the new rows via the debounce/firing path.
+                    if app.sessions.deep_search_query.is_some() {
+                        app.pending_deep_search = app.sessions.deep_search_query.clone();
                     }
                 }
             }
@@ -164,10 +175,13 @@ pub(crate) fn handle_session_msg(app: &mut App, msg: SessionMsg) {
                     let visible_len = crate::cli::tui::app::visible_sessions_for_state(
                         &app.filter,
                         &app.app_type,
+                        app.sessions.show_all_providers,
                         &app.sessions.rows,
                         app.sessions.detail_key.as_deref(),
                         app.sessions.messages_loaded,
                         &app.sessions.messages,
+                        app.sessions.deep_search_query.as_deref(),
+                        &app.sessions.deep_search_results,
                     )
                     .len();
                     if visible_len == 0 {
@@ -189,6 +203,22 @@ pub(crate) fn handle_session_msg(app: &mut App, msg: SessionMsg) {
                 );
             }
         },
+        SessionMsg::SearchFinished { request_id, result } => {
+            // Only apply if this is the latest search request
+            if app.sessions.deep_search_active != Some(request_id) {
+                return;
+            }
+            app.sessions.deep_search_active = None;
+            match result {
+                Ok(hits) => {
+                    app.sessions.deep_search_results = hits;
+                    app.sessions.selected_idx = 0;
+                }
+                Err(_) => {
+                    app.sessions.deep_search_results.clear();
+                }
+            }
+        }
     }
 }
 

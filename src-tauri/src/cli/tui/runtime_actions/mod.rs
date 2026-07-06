@@ -223,7 +223,14 @@ pub(crate) fn handle_action(
                 );
                 return Ok(());
             };
-            let provider_id = ctx.app.app_type.as_str().to_string();
+            // In "show all providers" mode, refresh must rescan every provider
+            // (the virtual "all" id), otherwise `r` would only refresh the
+            // current app and the stale "all" cache would be restored afterward.
+            let provider_id = if ctx.app.sessions.show_all_providers {
+                "all".to_string()
+            } else {
+                ctx.app.app_type.as_str().to_string()
+            };
             let request_id = ctx.app.sessions.start_scan(provider_id.clone());
             if let Err(err) = tx.send(SessionReq::Refresh {
                 request_id,
@@ -235,6 +242,25 @@ pub(crate) fn handle_action(
                     ToastKind::Warning,
                 );
             }
+            Ok(())
+        }
+        Action::SessionsDeepSearch { query } => {
+            let Some(tx) = ctx.session_req_tx else {
+                return Ok(());
+            };
+            // Set the query immediately so the UI shows "searching" state
+            ctx.app.sessions.deep_search_query = Some(query.clone());
+            ctx.app.sessions.deep_search_results.clear();
+            ctx.app.sessions.deep_search_seq = ctx.app.sessions.deep_search_seq.wrapping_add(1);
+            let request_id = ctx.app.sessions.deep_search_seq;
+            ctx.app.sessions.deep_search_active = Some(request_id);
+            // Snapshot the sessions to search (respecting show_all / provider filter)
+            let sessions = ctx.app.sessions.rows.clone();
+            let _ = tx.send(SessionReq::Search {
+                request_id,
+                query,
+                sessions,
+            });
             Ok(())
         }
         Action::SessionResume { command, cwd } => {

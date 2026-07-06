@@ -191,6 +191,16 @@ pub struct SessionsState {
     pub delete_seq: u64,
     pub delete_active: HashSet<u64>,
     pub scan_cache: std::collections::HashMap<String, CachedScan>,
+    /// When true, the session list shows all providers (the "全部" tab).
+    /// When false (default), only the currently selected provider is shown.
+    pub show_all_providers: bool,
+    /// Deep search state: query string and results from backend full-content search.
+    pub deep_search_query: Option<String>,
+    pub deep_search_seq: u64,
+    pub deep_search_active: Option<u64>,
+    pub deep_search_results: Vec<crate::session_manager::SessionSearchHit>,
+    /// Pending deep search: (query, ticks since last input). When ticks >= threshold, fire search.
+    pub deep_search_pending: Option<(String, u64)>,
 }
 
 impl Default for SessionsState {
@@ -219,6 +229,12 @@ impl Default for SessionsState {
             delete_seq: 0,
             delete_active: HashSet::new(),
             scan_cache: std::collections::HashMap::new(),
+            show_all_providers: false,
+            deep_search_query: None,
+            deep_search_seq: 0,
+            deep_search_active: None,
+            deep_search_results: Vec::new(),
+            deep_search_pending: None,
         }
     }
 }
@@ -412,10 +428,14 @@ impl SessionsState {
             return false;
         }
         self.selected_idx = self.selected_idx.min(self.rows.len().saturating_sub(1));
-        if let Some(provider_id) = self.provider_id.clone() {
-            if let Some(cached) = self.scan_cache.get_mut(&provider_id) {
-                cached.rows = self.rows.clone();
-            }
+        // Drop the deleted session from every cached bucket (current provider,
+        // the virtual "all" bucket, and any other provider bucket) so it cannot
+        // resurrect as a phantom row when the list is restored from cache after
+        // switching provider/all views.
+        for cached in self.scan_cache.values_mut() {
+            cached
+                .rows
+                .retain(|session| crate::cli::tui::app::session_key(session) != key);
         }
         if self.detail_key.as_deref() == Some(key) {
             self.clear_detail();
