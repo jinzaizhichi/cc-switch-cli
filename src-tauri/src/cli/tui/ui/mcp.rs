@@ -81,20 +81,8 @@ pub(super) fn render_mcp(
         ])
         .split(inner);
 
-    render_page_key_bar(
-        frame,
-        chunks[0],
-        theme,
-        &[
-            ("Space", texts::tui_key_toggle()),
-            ("m", texts::tui_key_apps()),
-            ("a", texts::tui_key_add()),
-            ("e", texts::tui_key_edit()),
-            ("i", texts::tui_mcp_action_import_existing()),
-            ("d", texts::tui_key_delete()),
-        ],
-        app.focus == Focus::Content,
-    );
+    let keys = crate::cli::tui::keymap::mcp::key_bar_items(app, data);
+    render_page_key_bar(frame, chunks[0], theme, &keys, app.focus == Focus::Content);
 
     let summary = texts::tui_mcp_server_counts(
         data.mcp

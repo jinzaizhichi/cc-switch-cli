@@ -367,30 +367,40 @@ impl App {
     }
 
     pub(crate) fn on_mcp_key(&mut self, key: KeyEvent, data: &UiData) -> Action {
+        use crate::cli::tui::keymap::mcp::Intent;
+
         let visible = visible_mcp(&self.filter, data);
         match key.code {
             KeyCode::Up => {
                 self.mcp_idx = self.mcp_idx.saturating_sub(1);
-                Action::None
+                return Action::None;
             }
             KeyCode::Down => {
                 if !visible.is_empty() {
                     self.mcp_idx = (self.mcp_idx + 1).min(visible.len() - 1);
                 }
-                Action::None
+                return Action::None;
             }
-            KeyCode::Char('a') => {
+            _ => {}
+        }
+
+        let Some(intent) = crate::cli::tui::keymap::mcp::intent_for(key.code) else {
+            return Action::None;
+        };
+
+        match intent {
+            Intent::Add => {
                 self.open_mcp_add_form();
                 Action::None
             }
-            KeyCode::Char('e') => {
+            Intent::Edit => {
                 let Some(row) = visible.get(self.mcp_idx) else {
                     return Action::None;
                 };
                 self.open_mcp_edit_form(row);
                 Action::None
             }
-            KeyCode::Char(' ') => {
+            Intent::Toggle => {
                 let Some(row) = visible.get(self.mcp_idx) else {
                     return Action::None;
                 };
@@ -400,7 +410,7 @@ impl App {
                     enabled: !enabled,
                 }
             }
-            KeyCode::Char('m') => {
+            Intent::Apps => {
                 let Some(row) = visible.get(self.mcp_idx) else {
                     return Action::None;
                 };
@@ -412,8 +422,8 @@ impl App {
                 };
                 Action::None
             }
-            KeyCode::Char('i') => Action::McpImport,
-            KeyCode::Char('d') => {
+            Intent::Import => Action::McpImport,
+            Intent::Delete => {
                 let Some(row) = visible.get(self.mcp_idx) else {
                     return Action::None;
                 };
@@ -424,7 +434,6 @@ impl App {
                 });
                 Action::None
             }
-            _ => Action::None,
         }
     }
 

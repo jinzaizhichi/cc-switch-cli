@@ -242,6 +242,85 @@ pub(crate) mod providers {
     }
 }
 
+pub(crate) mod mcp {
+    use crossterm::event::KeyCode;
+
+    use super::Binding;
+    use crate::cli::i18n::texts;
+    use crate::cli::tui::app::{visible_mcp, App};
+    use crate::cli::tui::data::UiData;
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) enum Intent {
+        Toggle,
+        Apps,
+        Add,
+        Edit,
+        Import,
+        Delete,
+    }
+
+    pub(crate) const BINDINGS: &[Binding<Intent>] = &[
+        Binding {
+            display: "Space",
+            keys: &[KeyCode::Char(' ')],
+            intent: Intent::Toggle,
+            label: |_, _| texts::tui_key_toggle(),
+            shown: any_visible,
+        },
+        Binding {
+            display: "m",
+            keys: &[KeyCode::Char('m')],
+            intent: Intent::Apps,
+            label: |_, _| texts::tui_key_apps(),
+            shown: any_visible,
+        },
+        Binding {
+            display: "a",
+            keys: &[KeyCode::Char('a')],
+            intent: Intent::Add,
+            label: |_, _| texts::tui_key_add(),
+            shown: |_, _| true,
+        },
+        Binding {
+            display: "e",
+            keys: &[KeyCode::Char('e')],
+            intent: Intent::Edit,
+            label: |_, _| texts::tui_key_edit(),
+            shown: any_visible,
+        },
+        Binding {
+            display: "i",
+            keys: &[KeyCode::Char('i')],
+            intent: Intent::Import,
+            label: |_, _| texts::tui_mcp_action_import_existing(),
+            shown: |_, _| true,
+        },
+        Binding {
+            display: "d",
+            keys: &[KeyCode::Char('d')],
+            intent: Intent::Delete,
+            label: |_, _| texts::tui_key_delete(),
+            shown: any_visible,
+        },
+    ];
+
+    pub(crate) fn intent_for(key: KeyCode) -> Option<Intent> {
+        super::intent_for(BINDINGS, key)
+    }
+
+    pub(crate) fn key_bar_items(app: &App, data: &UiData) -> Vec<(&'static str, &'static str)> {
+        super::key_bar_items(BINDINGS, app, data)
+    }
+
+    fn any_visible(app: &App, data: &UiData) -> bool {
+        visible_mcp(&app.filter, data)
+            .get(app.mcp_idx)
+            .copied()
+            .is_some()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::providers::{self, Intent};

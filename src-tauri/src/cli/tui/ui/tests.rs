@@ -4099,7 +4099,27 @@ fn mcp_page_uses_space_toggle_key() {
     app.route = Route::Mcp;
     app.focus = Focus::Content;
 
-    let data = minimal_data(&app.app_type);
+    // Row-dependent chips (toggle) only show when a row is selectable.
+    let mut data = minimal_data(&app.app_type);
+    data.mcp.rows = vec![super::super::data::McpRow {
+        id: "m1".to_string(),
+        server: crate::app_config::McpServer {
+            id: "m1".to_string(),
+            name: "Server".to_string(),
+            server: json!({}),
+            apps: crate::app_config::McpApps {
+                claude: true,
+                codex: false,
+                gemini: false,
+                opencode: false,
+                hermes: false,
+            },
+            description: None,
+            homepage: None,
+            docs: None,
+            tags: vec![],
+        },
+    }];
     let buf = render(&app, &data);
     let all = all_text(&buf);
 
@@ -4175,7 +4195,7 @@ fn page_key_bar_stays_visible_while_nav_has_focus() {
     let buf = render(&app, &data);
     let all = all_text(&buf);
     assert!(
-        all.contains("Space=toggle"),
+        all.contains("a=add"),
         "key bar should stay visible (dimmed) with nav focus: {all}"
     );
 }
