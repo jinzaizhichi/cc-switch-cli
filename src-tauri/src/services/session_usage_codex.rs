@@ -663,9 +663,13 @@ mod tests {
         let (imported, _) = sync_single_codex_file(&db, &path, 1, &mut cache, Some(&store))?;
         assert_eq!(imported, 1);
 
-        // 历史部分覆写为等长垃圾（单行、无任何可解析事件），追加 e2
-        let junk = "x".repeat(head.len() - 1) + "\n";
-        fs::write(&path, format!("{junk}{e2}\n")).expect("rewrite");
+        // 把 session_meta/turn_context 两行覆写为等长垃圾（e1 行保持原样，
+        // 尾部指纹窗口不受影响），再追加 e2。回退路径会因 meta 行损坏而把
+        // session 记为 unknown、且需重放 e1 重建状态；续传路径直接从 sidecar
+        // 恢复 sess-1/gpt-5/prev_total/event_index。
+        let prefix_len = meta.len() + 1 + turn.len() + 1;
+        let junk = "x".repeat(prefix_len - 1) + "\n";
+        fs::write(&path, format!("{junk}{e1}\n{e2}\n")).expect("rewrite");
 
         let (imported2, skipped2) =
             sync_single_codex_file(&db, &path, 2, &mut cache, Some(&store))?;

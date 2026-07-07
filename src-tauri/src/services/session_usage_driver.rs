@@ -30,21 +30,40 @@ use crate::error::AppError;
 use crate::services::session_usage::metadata_modified_nanos;
 use crate::session_manager::scan_cache_store::{ScanCacheStore, SyncResumeHint};
 
+/// 尾部指纹窗口：`byte_offset` 前至多这么多字节参与 FNV-1a 指纹。
+const TAIL_HASH_WINDOW: u64 = 64;
+
+/// FNV-1a 64 位哈希：无依赖、确定性，用作续传边界的内容指纹。
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
 /// 一次增量扫描的结果：调用方写库时用 `(file_modified, line_offset)` 更新
 /// 主库权威进度，提交成功后用整个 outcome 写回 sidecar 提示。
-pub(crate) struct JsonlScanOutcome<S> {
-    /// 扫描结束时的解析器状态（序列化进 sidecar 提示，供下次续传恢复）。
-    pub state: S,
-    /// 扫描结束时的行号（与主库 last_line_offset 语义一致，含最后的不完整行）。
+///
+/// `line_offset`/`byte_pos` 只推进到最后一个**换行边界**：文件末尾的不完整
+/// 行会进回调（旧行为如此，且写满的最终行可能永远不带换行符），但不计入
+/// 持久化进度——正在被追加的半行下个周期从边界重读，去重保证不重复导入，
+/// 从而修复了旧行 offset 语义下"半行被计数、补全后被跳过"的永久漏导入。
+pub(crate) struct JsonlScanOutcome {
+    /// 最后一个换行边界处的行号（与主库 last_line_offset 语义一致）。
     pub line_offset: i64,
-    /// 扫描结束时的字节位置。
+    /// 最后一个换行边界处的字节位置。
     pub byte_pos: u64,
     /// 本次使用的文件 mtime 纳秒值。
     pub file_modified: i64,
+    /// 换行边界处的状态机序列化快照（不含末尾不完整行的影响）；写进
+    /// sidecar 提示，保证续传恢复的状态与恢复的字节位置严格对应。
+    resume_state_json: Option<String>,
 }
 
-/// 校验 sidecar 字节续传提示：与主库权威行完全一致、且文件未被截断时才可用。
-pub(crate) fn load_valid_resume_hint(
+/// 基础校验：提示与主库权威行完全一致、且文件未被截断。
+fn load_matching_resume_hint(
     resume: Option<&ScanCacheStore>,
     file_path: &str,
     last_modified: i64,
@@ -64,6 +83,39 @@ pub(crate) fn load_valid_resume_hint(
         .then_some(hint)
 }
 
+/// 内容校验 + 定位：读出 `byte_offset` 前的尾部窗口比对指纹（识别同路径
+/// 整体重写成更大文件的轮转场景），通过后文件游标恰好停在 `byte_offset`。
+/// 任一环节失败返回 None，调用方回退从头扫描。
+fn validate_hint_and_seek<S: DeserializeOwned>(
+    file: &mut fs::File,
+    hint: &SyncResumeHint,
+) -> Option<(u64, S)> {
+    let expected = hint.tail_hash?;
+    let state: S = serde_json::from_str(hint.state.as_deref()?).ok()?;
+
+    let byte_offset = hint.byte_offset as u64;
+    let window = byte_offset.min(TAIL_HASH_WINDOW);
+    file.seek(SeekFrom::Start(byte_offset - window)).ok()?;
+    let mut tail = vec![0u8; window as usize];
+    std::io::Read::read_exact(file, &mut tail).ok()?;
+    if fnv1a64(&tail) as i64 != expected {
+        return None;
+    }
+    // read_exact 结束后游标恰好位于 byte_offset，无需再次 seek
+    Some((byte_offset, state))
+}
+
+/// 读取文件 `byte_pos` 前的尾部窗口指纹（保存提示时使用）。对 append-only
+/// 文件而言这段字节此后不再变化，即使保存时文件仍在增长也稳定。
+fn compute_tail_hash(file_path: &str, byte_pos: u64) -> Option<i64> {
+    let mut file = fs::File::open(file_path).ok()?;
+    let window = byte_pos.min(TAIL_HASH_WINDOW);
+    file.seek(SeekFrom::Start(byte_pos - window)).ok()?;
+    let mut tail = vec![0u8; window as usize];
+    std::io::Read::read_exact(&mut file, &mut tail).ok()?;
+    Some(fnv1a64(&tail) as i64)
+}
+
 /// 增量扫描单个 JSONL 文件。
 ///
 /// 返回 `Ok(None)` 表示文件自上次同步以来未变化（mtime 跳过）；返回
@@ -81,7 +133,7 @@ pub(crate) fn scan_jsonl_incremental<S, F>(
     resume: Option<&ScanCacheStore>,
     init_state: impl FnOnce() -> S,
     mut on_line: F,
-) -> Result<Option<JsonlScanOutcome<S>>, AppError>
+) -> Result<Option<JsonlScanOutcome>, AppError>
 where
     S: Serialize + DeserializeOwned,
     F: FnMut(&mut S, &str, bool),
@@ -107,22 +159,25 @@ where
         fs::File::open(file_path).map_err(|e| AppError::Config(format!("无法打开文件: {e}")))?;
     let file_len = file.metadata().map(|m| m.len()).unwrap_or(0);
 
-    // 字节续传：提示有效且状态机可反序列化时 seek 续读；否则从头回退
+    // 字节续传：提示与权威行一致、尾部指纹吻合、状态机可反序列化时 seek 续读；
+    // 否则从头回退（指纹校验可能移动过游标，必须归零）
     let resumed =
-        load_valid_resume_hint(resume, &file_path_str, last_modified, last_offset, file_len)
-            .and_then(|hint| {
-                let state: S = serde_json::from_str(hint.state.as_deref()?).ok()?;
-                Some((hint.byte_offset as u64, state))
-            });
+        load_matching_resume_hint(resume, &file_path_str, last_modified, last_offset, file_len)
+            .and_then(|hint| validate_hint_and_seek::<S>(&mut file, &hint));
 
     let (mut state, mut line_offset, mut byte_pos) = match resumed {
-        Some((byte_offset, state)) => {
-            file.seek(SeekFrom::Start(byte_offset))
+        Some((byte_offset, state)) => (state, last_offset, byte_offset),
+        None => {
+            file.seek(SeekFrom::Start(0))
                 .map_err(|e| AppError::Config(format!("无法定位文件偏移: {e}")))?;
-            (state, last_offset, byte_offset)
+            (init_state(), 0i64, 0u64)
         }
-        None => (init_state(), 0i64, 0u64),
     };
+
+    // 持久化进度只推进到换行边界；末尾不完整行进回调但不进进度
+    let mut committed_line_offset = line_offset;
+    let mut committed_byte_pos = byte_pos;
+    let mut resume_state_json: Option<String> = None;
 
     let mut reader = BufReader::new(file);
     let mut raw: Vec<u8> = Vec::new();
@@ -140,6 +195,17 @@ where
         line_offset += 1;
         let is_new = line_offset > last_offset;
 
+        if raw.last() == Some(&b'\n') {
+            committed_byte_pos = byte_pos;
+            committed_line_offset = line_offset;
+        } else if resume_state_json.is_none() {
+            // 第一次遇到不完整尾行：先固化换行边界处的状态机快照，再让该
+            // 行进回调。回调可能据此导入（写满但缺换行的最终行必须导入），
+            // 但持久化的 (进度, 状态) 停在边界，下个周期从边界重读该行，
+            // 各 app 的 request_id 去重保证不会重复入库。
+            resume_state_json = serde_json::to_string(&state).ok();
+        }
+
         // 与旧 lines() 语义一致：无效 UTF-8 行跳过
         let Ok(line) = std::str::from_utf8(&raw) else {
             continue;
@@ -152,20 +218,25 @@ where
         on_line(&mut state, line, is_new);
     }
 
+    // 无不完整尾行时，边界快照就是最终状态
+    if resume_state_json.is_none() {
+        resume_state_json = serde_json::to_string(&state).ok();
+    }
+
     Ok(Some(JsonlScanOutcome {
-        state,
-        line_offset,
-        byte_pos,
+        line_offset: committed_line_offset,
+        byte_pos: committed_byte_pos,
         file_modified,
+        resume_state_json,
     }))
 }
 
-/// 主库进度提交成功后，把字节位置与状态机写回 sidecar（尽力而为，
-/// 失败只损失下次的续传加速，不影响正确性）。
-pub(crate) fn save_resume_hint<S: Serialize>(
+/// 主库进度提交成功后，把字节位置、状态机快照与尾部指纹写回 sidecar
+/// （尽力而为，失败只损失下次的续传加速，不影响正确性）。
+pub(crate) fn save_resume_hint(
     resume: Option<&ScanCacheStore>,
     file_path_str: &str,
-    outcome: &JsonlScanOutcome<S>,
+    outcome: &JsonlScanOutcome,
 ) {
     let Some(store) = resume else {
         return;
@@ -175,7 +246,8 @@ pub(crate) fn save_resume_hint<S: Serialize>(
         last_modified: outcome.file_modified,
         last_line_offset: outcome.line_offset,
         byte_offset: outcome.byte_pos as i64,
-        state: serde_json::to_string(&outcome.state).ok(),
+        state: outcome.resume_state_json.clone(),
+        tail_hash: compute_tail_hash(file_path_str, outcome.byte_pos),
     };
     if let Err(err) = store.save_sync_resume(&hint) {
         log::debug!("[SESSION-SYNC] 写入字节续传提示失败 ({file_path_str}): {err}");
@@ -188,13 +260,21 @@ mod tests {
     use serde::Deserialize;
     use std::io::Write;
 
-    /// 测试用状态机：记录回调看到的每一行及其 is_new 标记。
-    /// `seen` 标记 serde(skip)：它是"本轮观察记录"而非跨轮解析状态，
-    /// 不应随续传提示往返。
+    /// 测试用状态机：空壳，仅满足续传往返的 serde 约束；回调观察结果由
+    /// 调用方通过外部缓冲捕获（观察记录不是跨轮解析状态，不应进提示）。
     #[derive(Debug, Default, Serialize, Deserialize)]
-    struct RecordingState {
-        #[serde(skip)]
+    struct NoState;
+
+    /// 一次扫描的观察结果：outcome + 回调看到的每一行及其 is_new 标记。
+    struct Observed {
+        outcome: Option<JsonlScanOutcome>,
         seen: Vec<(String, bool)>,
+    }
+
+    impl Observed {
+        fn out(&self) -> &JsonlScanOutcome {
+            self.outcome.as_ref().expect("changed")
+        }
     }
 
     /// `file_mtime` 显式传入（模拟 walk 阶段取得的值）：测试不依赖真实文件
@@ -205,17 +285,19 @@ mod tests {
         last_modified: i64,
         last_offset: i64,
         resume: Option<&ScanCacheStore>,
-    ) -> Option<JsonlScanOutcome<RecordingState>> {
-        scan_jsonl_incremental(
+    ) -> Observed {
+        let mut seen = Vec::new();
+        let outcome = scan_jsonl_incremental(
             path,
             file_mtime,
             last_modified,
             last_offset,
             resume,
-            RecordingState::default,
-            |state, line, is_new| state.seen.push((line.to_string(), is_new)),
+            NoState::default,
+            |_state, line, is_new| seen.push((line.to_string(), is_new)),
         )
-        .expect("scan")
+        .expect("scan");
+        Observed { outcome, seen }
     }
 
     #[test]
@@ -224,14 +306,14 @@ mod tests {
         let path = dir.path().join("s.jsonl");
         std::fs::write(&path, "l1\nl2\n").expect("write");
 
-        let outcome = scan_at(&path, 0, 0, 0, None).expect("changed");
+        let outcome = scan_at(&path, 0, 0, 0, None);
         assert_eq!(
-            outcome.state.seen,
+            outcome.seen,
             vec![("l1".to_string(), true), ("l2".to_string(), true)]
         );
-        assert_eq!(outcome.line_offset, 2);
-        assert_eq!(outcome.byte_pos, 6);
-        assert!(outcome.file_modified > 0);
+        assert_eq!(outcome.out().line_offset, 2);
+        assert_eq!(outcome.out().byte_pos, 6);
+        assert!(outcome.out().file_modified > 0);
     }
 
     #[test]
@@ -240,34 +322,102 @@ mod tests {
         let path = dir.path().join("s.jsonl");
         std::fs::write(&path, "l1\n").expect("write");
         // mtime 未超过已记录的 last_modified → 跳过
-        assert!(scan_at(&path, 5, 5, 1, None).is_none());
+        assert!(scan_at(&path, 5, 5, 1, None).outcome.is_none());
     }
 
     #[test]
     fn resume_seeks_past_history_even_when_head_bytes_change() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("s.jsonl");
-        std::fs::write(&path, "l1\nl2\n").expect("write");
+        // 行足够长，让头部破坏落在尾部指纹窗口（64 字节）之外
+        let l1 = "a".repeat(80);
+        let l2 = "b".repeat(80);
+        std::fs::write(&path, format!("{l1}\n{l2}\n")).expect("write");
         let store = ScanCacheStore::in_memory().expect("store");
 
-        let first = scan_at(&path, 1_000, 0, 0, Some(&store)).expect("changed");
-        save_resume_hint(Some(&store), &path.to_string_lossy(), &first);
+        let first = scan_at(&path, 1_000, 0, 0, Some(&store));
+        assert_eq!(first.out().byte_pos, 162);
+        save_resume_hint(Some(&store), &path.to_string_lossy(), first.out());
 
         // 破坏头部但保持总字节数不变：把第一个换行符改成空格，两行并作一行。
         // 行式回退路径会因行号偏移而错跳新行；字节续传路径完全不受影响。
-        std::fs::write(&path, "l1 l2\nl3\n").expect("rewrite");
+        std::fs::write(&path, format!("{l1} {l2}\nl3\n")).expect("rewrite");
 
         let second = scan_at(
             &path,
             2_000,
-            first.file_modified,
-            first.line_offset,
+            first.out().file_modified,
+            first.out().line_offset,
             Some(&store),
-        )
-        .expect("changed");
-        assert_eq!(second.state.seen, vec![("l3".to_string(), true)]);
-        assert_eq!(second.line_offset, first.line_offset + 1);
-        assert_eq!(second.byte_pos, 9);
+        );
+        assert_eq!(second.seen, vec![("l3".to_string(), true)]);
+        assert_eq!(second.out().line_offset, first.out().line_offset + 1);
+        assert_eq!(second.out().byte_pos, 165);
+    }
+
+    #[test]
+    fn partial_tail_line_does_not_advance_persisted_progress() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("s.jsonl");
+        // 末行没有换行符：可能是写到一半，也可能是永远不带换行的最终行
+        std::fs::write(&path, "l1\nl2").expect("write");
+        let store = ScanCacheStore::in_memory().expect("store");
+
+        let first = scan_at(&path, 1_000, 0, 0, Some(&store));
+        // 不完整行仍进回调（写满但缺换行的最终行必须能导入）……
+        assert_eq!(
+            first.seen,
+            vec![("l1".to_string(), true), ("l2".to_string(), true)]
+        );
+        // ……但持久化进度停在换行边界
+        assert_eq!(first.out().line_offset, 1);
+        assert_eq!(first.out().byte_pos, 3);
+        save_resume_hint(Some(&store), &path.to_string_lossy(), first.out());
+
+        // 半行被补全并追加新行（append-only，前缀字节不变）
+        std::fs::write(&path, "l1\nl2-completed\nl3\n").expect("complete");
+
+        let second = scan_at(
+            &path,
+            2_000,
+            first.out().file_modified,
+            first.out().line_offset,
+            Some(&store),
+        );
+        // 从边界续读：补全后的完整行与新行都被处理，没有漏也没有错位
+        assert_eq!(
+            second.seen,
+            vec![("l2-completed".to_string(), true), ("l3".to_string(), true)]
+        );
+        assert_eq!(second.out().line_offset, 3);
+        assert_eq!(second.out().byte_pos, 19);
+    }
+
+    #[test]
+    fn rewritten_larger_file_invalidates_hint() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("s.jsonl");
+        let l1 = "a".repeat(80);
+        std::fs::write(&path, format!("{l1}\n")).expect("write");
+        let store = ScanCacheStore::in_memory().expect("store");
+
+        let first = scan_at(&path, 1_000, 0, 0, Some(&store));
+        save_resume_hint(Some(&store), &path.to_string_lossy(), first.out());
+
+        // 同路径整体重写成"更大"的文件：size/offset 校验都能通过，
+        // 只有尾部指纹能识破 → 必须回退从头扫描
+        let rewritten = "z".repeat(200);
+        std::fs::write(&path, format!("{rewritten}\n")).expect("rotate");
+
+        let second = scan_at(
+            &path,
+            2_000,
+            first.out().file_modified,
+            first.out().line_offset,
+            Some(&store),
+        );
+        // 回退路径：新文件第 1 行行号 <= last_offset，以 is_new=false 重放
+        assert_eq!(second.seen, vec![(rewritten, false)]);
     }
 
     #[test]
@@ -277,9 +427,9 @@ mod tests {
         std::fs::write(&path, "l1\nl2\n").expect("write");
         let store = ScanCacheStore::in_memory().expect("store");
 
-        let first = scan_at(&path, 1_000, 0, 0, Some(&store)).expect("changed");
+        let first = scan_at(&path, 1_000, 0, 0, Some(&store));
         let path_str = path.to_string_lossy().to_string();
-        save_resume_hint(Some(&store), &path_str, &first);
+        save_resume_hint(Some(&store), &path_str, first.out());
 
         // 篡改提示的权威快照，模拟主库被外部同步覆盖后的错位
         let mut stale = store
@@ -300,13 +450,12 @@ mod tests {
         let second = scan_at(
             &path,
             2_000,
-            first.file_modified,
-            first.line_offset,
+            first.out().file_modified,
+            first.out().line_offset,
             Some(&store),
-        )
-        .expect("changed");
+        );
         assert_eq!(
-            second.state.seen,
+            second.seen,
             vec![
                 ("l1".to_string(), false),
                 ("l2".to_string(), false),
@@ -322,21 +471,20 @@ mod tests {
         std::fs::write(&path, "long-line-1\nlong-line-2\n").expect("write");
         let store = ScanCacheStore::in_memory().expect("store");
 
-        let first = scan_at(&path, 1_000, 0, 0, Some(&store)).expect("changed");
+        let first = scan_at(&path, 1_000, 0, 0, Some(&store));
         let path_str = path.to_string_lossy().to_string();
-        save_resume_hint(Some(&store), &path_str, &first);
+        save_resume_hint(Some(&store), &path_str, first.out());
 
         // 文件被截断重写：长度小于提示的字节位置 → 提示失效，从头回退
         std::fs::write(&path, "x\n").expect("truncate");
         let second = scan_at(
             &path,
             2_000,
-            first.file_modified,
-            first.line_offset,
+            first.out().file_modified,
+            first.out().line_offset,
             Some(&store),
-        )
-        .expect("changed");
+        );
         // 回退路径按行号跳过：仅 1 行且行号 <= last_offset，全部 is_new=false
-        assert_eq!(second.state.seen, vec![("x".to_string(), false)]);
+        assert_eq!(second.seen, vec![("x".to_string(), false)]);
     }
 }

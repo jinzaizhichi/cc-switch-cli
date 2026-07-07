@@ -125,11 +125,21 @@ apps can be added without re-inventing the machinery:
 - **Authoritative progress** stays in cc-switch.db's `session_log_sync`
   (`last_modified` + `last_line_offset`, upstream-compatible shape).
 - **Acceleration hints** live in the sidecar (`session_sync_resume`):
-  per-file byte offset plus a serialized parser state. A hint is honored only
-  when its `(last_modified, last_line_offset)` snapshot exactly matches the
-  authoritative row and the file has not shrunk; any mismatch (database
+  per-file byte offset plus a serialized parser state and a tail fingerprint
+  (FNV-1a over the ≤64 bytes before the offset). A hint is honored only when
+  its `(last_modified, last_line_offset)` snapshot exactly matches the
+  authoritative row, the file has not shrunk, and the tail fingerprint still
+  matches the file's bytes — the fingerprint catches a same-path rewrite to
+  a *larger* file, which size/mtime checks cannot. Any mismatch (database
   synced in from another machine, rotated file, missing hint) falls back to
   today's read-from-zero line-counted pass and records a fresh hint.
+- **Persisted progress stops at the last newline boundary.** A trailing line
+  without a newline is still fed to the parser (a finished file's last line
+  may legitimately never get one) but is not counted into
+  `session_log_sync`/hint progress, so a line that was caught mid-append is
+  re-read next cycle instead of being skipped forever (per-app request-id
+  dedup makes the re-read safe). This also fixes the pre-existing loss in
+  the line-offset path.
 - **The generic JSONL driver** (`scan_jsonl_incremental`) owns: the mtime
   skip, hint validation, seek-or-fallback, byte-exact line reading
   (`read_until`), and line/byte bookkeeping. An app plugs in two things: a

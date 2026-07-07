@@ -33,9 +33,10 @@ pub struct ScanCacheStore {
 /// 使用统计增量同步的字节续传提示（存于 sidecar 的 `session_sync_resume` 表）。
 ///
 /// 主库 `session_log_sync` 的 `(last_modified, last_line_offset)` 仍是权威进度；
-/// 本提示只是加速手段：`(last_modified, last_line_offset)` 与权威行完全一致时，
-/// 解析器可直接 seek 到 `byte_offset` 续读，免去从字节 0 重读整个文件。任何
-/// 不一致（例如整库从别的机器同步进来、或文件被截断）都应忽略提示回退旧路径。
+/// 本提示只是加速手段：`(last_modified, last_line_offset)` 与权威行完全一致、
+/// 且 `byte_offset` 前的尾部字节指纹（`tail_hash`）与文件当前内容吻合时，
+/// 解析器才直接 seek 到 `byte_offset` 续读。任何不一致（整库从别的机器同步
+/// 进来、文件被截断、同路径整体重写）都应忽略提示回退旧路径。
 #[derive(Debug, Clone, PartialEq)]
 pub struct SyncResumeHint {
     pub file_path: String,
@@ -43,10 +44,13 @@ pub struct SyncResumeHint {
     pub last_modified: i64,
     /// 对应主库 session_log_sync.last_line_offset 的快照。
     pub last_line_offset: i64,
-    /// 上次处理完成时的字节位置（与行 offset 语义对齐，含最后一个不完整行）。
+    /// 上次处理完成时的字节位置（换行边界，不含末尾不完整行）。
     pub byte_offset: i64,
     /// 解析器续传状态 JSON（Codex 存整个状态机；Claude 存 session_id）。
     pub state: Option<String>,
+    /// `byte_offset` 前至多 64 字节的 FNV-1a 指纹：识别"同路径被整体重写成
+    /// 更大文件"的轮转场景（size/mtime 校验无法覆盖）。None 视为提示无效。
+    pub tail_hash: Option<i64>,
 }
 
 impl ScanCacheStore {
@@ -109,11 +113,17 @@ impl ScanCacheStore {
                 last_modified INTEGER NOT NULL,
                 last_line_offset INTEGER NOT NULL,
                 byte_offset INTEGER NOT NULL,
-                state TEXT
+                state TEXT,
+                tail_hash INTEGER
             )",
             [],
         )
         .map_err(|e| AppError::Database(format!("创建 session_sync_resume 表失败: {e}")))?;
+        // 纯本地缓存库无版本化迁移：旧文件缺列时就地补列，失败（列已存在）忽略。
+        let _ = conn.execute(
+            "ALTER TABLE session_sync_resume ADD COLUMN tail_hash INTEGER",
+            [],
+        );
 
         Ok(Self {
             conn: Mutex::new(conn),
@@ -289,7 +299,7 @@ impl ScanCacheStore {
         let conn = self.lock()?;
         let mut stmt = conn
             .prepare_cached(
-                "SELECT last_modified, last_line_offset, byte_offset, state
+                "SELECT last_modified, last_line_offset, byte_offset, state, tail_hash
                  FROM session_sync_resume WHERE file_path = ?1",
             )
             .map_err(|e| AppError::Database(e.to_string()))?;
@@ -301,6 +311,7 @@ impl ScanCacheStore {
                     last_line_offset: row.get(1)?,
                     byte_offset: row.get(2)?,
                     state: row.get(3)?,
+                    tail_hash: row.get(4)?,
                 })
             })
             .map(Some)
@@ -316,14 +327,15 @@ impl ScanCacheStore {
         let conn = self.lock()?;
         conn.execute(
             "INSERT OR REPLACE INTO session_sync_resume
-                (file_path, last_modified, last_line_offset, byte_offset, state)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+                (file_path, last_modified, last_line_offset, byte_offset, state, tail_hash)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             rusqlite::params![
                 hint.file_path,
                 hint.last_modified,
                 hint.last_line_offset,
                 hint.byte_offset,
                 hint.state,
+                hint.tail_hash,
             ],
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
