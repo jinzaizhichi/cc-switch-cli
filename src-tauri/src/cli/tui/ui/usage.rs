@@ -1194,18 +1194,35 @@ fn detail_line(
     ])
 }
 
+/// 后台会话日志导入进行时的进度后缀（如 " · 正在导入本地用量 1234/18704"）。
+/// 空闲时返回空串。数据来自 sync_progress 全局原子量——CLI 构建没有逐行
+/// 通知通道，渲染时直接读取即可。
+fn usage_sync_progress_suffix() -> String {
+    match crate::services::session_usage::sync_progress::snapshot() {
+        Some((done, total)) if total > 0 => {
+            if i18n::is_chinese() {
+                format!(" · 正在导入本地用量 {done}/{total}")
+            } else {
+                format!(" · importing local usage {done}/{total}")
+            }
+        }
+        _ => String::new(),
+    }
+}
+
 fn usage_summary_line(app: &App, data: &UiData) -> String {
+    let sync_suffix = usage_sync_progress_suffix();
     if current_usage_is_loading(app, data) {
         if i18n::is_chinese() {
-            return format!("{} · 正在加载中...", app.usage.range.label());
+            return format!("{} · 正在加载中...{sync_suffix}", app.usage.range.label());
         }
-        return format!("{} · Loading...", app.usage.range.label());
+        return format!("{} · Loading...{sync_suffix}", app.usage.range.label());
     }
 
     let summary = data.usage.summary_for(app.usage.range);
     if i18n::is_chinese() {
         format!(
-            "{} · {} 请求 · {} tokens · {} · 平均延迟 {}",
+            "{} · {} 请求 · {} tokens · {} · 平均延迟 {}{sync_suffix}",
             app.usage.range.label(),
             summary.total_requests,
             format_token_compact(summary.total_tokens()),
@@ -1214,7 +1231,7 @@ fn usage_summary_line(app: &App, data: &UiData) -> String {
         )
     } else {
         format!(
-            "{} · {} requests · {} tokens · {} · {} avg latency",
+            "{} · {} requests · {} tokens · {} · {} avg latency{sync_suffix}",
             app.usage.range.label(),
             summary.total_requests,
             format_token_compact(summary.total_tokens()),

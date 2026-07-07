@@ -1709,6 +1709,8 @@ pub fn run(app_override: Option<AppType>) -> Result<(), AppError> {
 
     let tick_rate = TUI_TICK_RATE;
     let mut last_tick = Instant::now();
+    // 后台会话用量导入进行时，Usage 页数字的周期性刷新节流
+    let mut last_usage_sync_data_refresh = Instant::now();
     let mut last_frame = Instant::now();
     let mut proxy_open_flash = ProxyOpenFlash::default();
     let mut proxy_loading = RequestTracker::default();
@@ -2366,6 +2368,32 @@ pub fn run(app_override: Option<AppType>) -> Result<(), AppError> {
                 &mut data,
                 quota.as_ref().map(|s| &s.req_tx),
             );
+            // 后台会话用量导入进行时：每 ~2.5s 重新聚合一次当前区间，让
+            // Usage 页数字随导入进度增长（P0 起最近文件最先入库，Today/7d
+            // 很快就有意义）；同步空闲时零开销。
+            if session_usage_sync.active.is_some()
+                && matches!(
+                    app.route,
+                    route::Route::Usage
+                        | route::Route::UsageLogs
+                        | route::Route::UsageLogDetail { .. }
+                )
+                && last_usage_sync_data_refresh.elapsed() >= Duration::from_millis(2500)
+            {
+                let usage_pricing_tx = usage_pricing.as_ref().map(|s| &s.req_tx);
+                if usage_pricing_tx.is_some() {
+                    data_cache.clear_usage_pricing_after_external_usage_sync();
+                    let range = app.usage.range;
+                    let app_type = app.app_type.clone();
+                    data_cache.queue_usage_pricing_load(
+                        &mut app,
+                        usage_pricing_tx,
+                        &app_type,
+                        range,
+                    );
+                }
+                last_usage_sync_data_refresh = Instant::now();
+            }
             last_tick = Instant::now();
         }
 

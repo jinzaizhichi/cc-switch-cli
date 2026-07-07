@@ -58,7 +58,10 @@ pub fn sync_gemini_usage(db: &Database) -> Result<SessionSyncResult, AppError> {
     // 本次同步周期共享的定价缓存，避免每条消息重复查 model_pricing 表。
     let mut pricing_cache = PricingCache::new();
 
+    crate::services::session_usage::sync_progress::add_total(files.len() as u32);
+
     for file_path in &files {
+        crate::services::session_usage::sync_progress::add_done(1);
         match sync_single_gemini_file(db, file_path, &mut pricing_cache) {
             Ok((imported, skipped)) => {
                 result.imported += imported;

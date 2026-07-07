@@ -181,7 +181,10 @@ pub fn sync_codex_usage(db: &Database) -> Result<SessionSyncResult, AppError> {
     // sidecar 字节续传提示：打不开时优雅降级为全文件重放路径。
     let resume_store = ScanCacheStore::open().ok();
 
+    crate::services::session_usage::sync_progress::add_total(files.len() as u32);
+
     for (file_path, file_mtime) in &files {
+        crate::services::session_usage::sync_progress::add_done(1);
         match sync_single_codex_file(
             db,
             file_path,

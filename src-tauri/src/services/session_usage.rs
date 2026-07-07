@@ -122,7 +122,54 @@ pub(crate) fn cached_model_pricing(
     pricing
 }
 
+/// 使用统计同步的进程内进度：TUI 在同步进行时读取它显示 "x/y 文件" 并周期
+/// 刷新数字（CLI 构建里 `notify_log_recorded` 是空实现，没有别的进度通道）。
+/// 用全局原子量而非回调层层传递，保持各 sync 函数签名稳定。
+pub mod sync_progress {
+    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+
+    static ACTIVE: AtomicBool = AtomicBool::new(false);
+    static FILES_DONE: AtomicU32 = AtomicU32::new(0);
+    static FILES_TOTAL: AtomicU32 = AtomicU32::new(0);
+
+    /// 同步周期存续期间持有；Drop 时无论成败都清除 active 标志。
+    pub(crate) struct SyncProgressGuard;
+
+    impl Drop for SyncProgressGuard {
+        fn drop(&mut self) {
+            ACTIVE.store(false, Ordering::Relaxed);
+        }
+    }
+
+    pub(crate) fn begin() -> SyncProgressGuard {
+        FILES_DONE.store(0, Ordering::Relaxed);
+        FILES_TOTAL.store(0, Ordering::Relaxed);
+        ACTIVE.store(true, Ordering::Relaxed);
+        SyncProgressGuard
+    }
+
+    pub(crate) fn add_total(n: u32) {
+        FILES_TOTAL.fetch_add(n, Ordering::Relaxed);
+    }
+
+    pub(crate) fn add_done(n: u32) {
+        FILES_DONE.fetch_add(n, Ordering::Relaxed);
+    }
+
+    /// 同步进行中返回 `(已处理, 总数)`，空闲返回 None。
+    pub fn snapshot() -> Option<(u32, u32)> {
+        if !ACTIVE.load(Ordering::Relaxed) {
+            return None;
+        }
+        Some((
+            FILES_DONE.load(Ordering::Relaxed),
+            FILES_TOTAL.load(Ordering::Relaxed),
+        ))
+    }
+}
+
 pub fn sync_all_session_usage(db: &Database) -> Result<SessionSyncResult, AppError> {
+    let _progress = sync_progress::begin();
     let mut result = SessionSyncResult {
         imported: 0,
         skipped: 0,
@@ -283,8 +330,11 @@ pub fn sync_claude_session_logs(db: &Database) -> Result<SessionSyncResult, AppE
     // sidecar 字节续传提示：打不开时优雅降级为行 offset 路径。
     let resume_store = ScanCacheStore::open().ok();
 
+    sync_progress::add_total(jsonl_files.len() as u32);
+
     for (file_path, file_mtime) in &jsonl_files {
         result.files_scanned += 1;
+        sync_progress::add_done(1);
 
         match sync_single_file(
             db,
@@ -856,6 +906,21 @@ pub(crate) fn delete_session_logs_covered_by_proxy_log(
 mod tests {
     use super::*;
     use crate::session_manager::scan_cache_store::ScanCacheStore;
+
+    /// sync_progress：begin 归零并置 active，guard drop 后 snapshot 归 None。
+    /// （lib 测试内只有本用例读写这些计数器：单文件级 sync_* 测试不经过
+    /// 外层循环的埋点，不会并发干扰。）
+    #[test]
+    fn sync_progress_guard_scopes_snapshot() {
+        assert!(sync_progress::snapshot().is_none());
+        {
+            let _guard = sync_progress::begin();
+            sync_progress::add_total(3);
+            sync_progress::add_done(1);
+            assert_eq!(sync_progress::snapshot(), Some((1, 3)));
+        }
+        assert!(sync_progress::snapshot().is_none());
+    }
 
     /// 字节续传判别测试：sync1 后把头部第一个换行改成空格（总字节数不变、
     /// 行数少一），再追加新消息并 bump mtime。行式回退路径会因行号整体前移把

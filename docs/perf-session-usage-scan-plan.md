@@ -162,11 +162,17 @@ re-reading it every cycle.
 
 Scope: TUI only.
 
-- Emit session scan results in batches (per provider or every N files) so the
-  list fills progressively during a genuine full scan instead of appearing all
-  at once.
-- Show sync progress (files processed / total) on the Usage page while the
-  background import runs.
+- The "all providers" session scan emits a partial result after each provider
+  finishes revalidating, so a genuine full scan (first-ever run, manual
+  reload) fills the list progressively instead of appearing all at once.
+- The Usage summary bar shows import progress (files processed / total) while
+  the background sync runs, fed by a process-global atomic tracker in
+  `session_usage::sync_progress` (the CLI build has no per-row notification
+  channel — `notify_log_recorded` is a no-op stub here).
+- While that sync is active and a Usage route is visible, the main loop
+  re-aggregates the current range every ~2.5 s, so the numbers fill in live;
+  combined with P0's newest-first import order, Today/7d becomes meaningful
+  within seconds of a long first import.
 
 ### Optional follow-ups (not scheduled)
 
