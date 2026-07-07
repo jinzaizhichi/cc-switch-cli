@@ -286,12 +286,12 @@ pub(crate) fn should_skip_session_insert(
 }
 
 fn proxy_request_id_exists(conn: &Connection, request_id: &str) -> Result<bool, AppError> {
-    conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM proxy_request_logs WHERE request_id = ?1)",
-        params![request_id],
-        |row| row.get::<_, bool>(0),
-    )
-    .map_err(|e| AppError::Database(format!("查询 request_id 失败: {e}")))
+    // prepare_cached：批量导入时同一 SQL 只编译一次，逐行复用编译后的语句。
+    let mut stmt = conn
+        .prepare_cached("SELECT EXISTS(SELECT 1 FROM proxy_request_logs WHERE request_id = ?1)")
+        .map_err(|e| AppError::Database(format!("查询 request_id 失败: {e}")))?;
+    stmt.query_row(params![request_id], |row| row.get::<_, bool>(0))
+        .map_err(|e| AppError::Database(format!("查询 request_id 失败: {e}")))
 }
 
 pub(crate) fn has_matching_proxy_usage_log(
@@ -323,8 +323,11 @@ pub(crate) fn has_matching_proxy_usage_log(
         )"
     );
 
-    conn.query_row(
-        &sql,
+    // SQL 文本对固定别名恒定，prepare_cached 可在批量导入时复用编译结果。
+    let mut stmt = conn
+        .prepare_cached(&sql)
+        .map_err(|e| AppError::Database(format!("查询重复代理用量日志失败: {e}")))?;
+    stmt.query_row(
         params![
             key.app_type,
             key.model,
