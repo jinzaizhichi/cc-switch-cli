@@ -443,6 +443,9 @@ pub struct AppSettings {
     /// TUI appearance: "auto" | "dark" | "light" (absent = auto).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub theme: Option<String>,
+    /// TUI icon rendering: "auto" | "emoji" | "ascii" (absent = auto).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icons: Option<String>,
     /// 是否开机自启
     #[serde(default)]
     pub launch_on_startup: bool,
@@ -514,6 +517,7 @@ impl Default for AppSettings {
             visible_apps_settings: VisibleAppsSettings::default(),
             language: None,
             theme: None,
+            icons: None,
             launch_on_startup: false,
             preserve_codex_official_auth_on_switch: false,
             unify_codex_session_history: false,
@@ -965,6 +969,13 @@ pub fn set_theme_mode(mode: &str) -> Result<(), AppError> {
     let mut settings = get_settings();
     settings.theme = Some(mode.to_string());
     update_settings(settings)
+}
+
+pub fn get_icon_mode() -> Option<String> {
+    settings_store()
+        .read()
+        .ok()
+        .and_then(|settings| settings.icons.clone())
 }
 
 pub fn get_visible_apps() -> VisibleApps {

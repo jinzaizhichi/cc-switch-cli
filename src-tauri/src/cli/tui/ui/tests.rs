@@ -2651,6 +2651,9 @@ fn header_keeps_proxy_visible_and_truncates_long_provider_name() {
 fn nav_icons_have_left_padding_from_border() {
     let _lock = lock_env();
     let _no_color = EnvGuard::remove("NO_COLOR");
+    // This test is specifically about the emoji icon column, so pin emoji
+    // mode rather than depend on the ambient locale (auto-detection).
+    let _icons = EnvGuard::set("CC_SWITCH_ICONS", "emoji");
 
     let app = App::new(Some(AppType::Claude));
     let data = minimal_data(&app.app_type);
@@ -4263,6 +4266,31 @@ fn page_key_bar_stays_visible_while_nav_has_focus() {
         all.contains("a=add"),
         "key bar should stay visible (dimmed) with nav focus: {all}"
     );
+}
+
+#[test]
+fn nav_drops_emoji_icons_in_ascii_mode() {
+    let _lock = lock_env();
+    let _lang = use_test_language(Language::English);
+    let _no_color = EnvGuard::set("NO_COLOR", "1");
+    let app = App::new(Some(AppType::Claude));
+    let data = minimal_data(&app.app_type);
+
+    let _emoji = EnvGuard::set("CC_SWITCH_ICONS", "emoji");
+    let emoji_nav = all_text(&render(&app, &data));
+    assert!(
+        emoji_nav.contains('🔑'),
+        "emoji mode should render the nav provider icon: {emoji_nav}"
+    );
+
+    let _ascii = EnvGuard::set("CC_SWITCH_ICONS", "ascii");
+    let ascii_nav = all_text(&render(&app, &data));
+    assert!(
+        !ascii_nav.contains('🔑'),
+        "ascii mode should drop the nav emoji: {ascii_nav}"
+    );
+    // The label text still renders — only the decorative glyph is gone.
+    assert!(ascii_nav.contains("Providers"), "{ascii_nav}");
 }
 
 #[test]

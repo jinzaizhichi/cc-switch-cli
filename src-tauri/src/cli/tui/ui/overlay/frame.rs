@@ -82,7 +82,7 @@ pub(super) fn overlay_frame_at(
         .borders(Borders::ALL)
         .border_type(BorderType::Plain)
         .border_style(border)
-        .title(format!(" {} ", title));
+        .title(format!(" {} ", icons::strip_icon(title)));
     frame.render_widget(block.clone(), area);
     let inner = block.inner(area);
 
