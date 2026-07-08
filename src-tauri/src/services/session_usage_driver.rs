@@ -17,6 +17,19 @@
 //! 权威行不符（首次运行、整库从别的机器 WebDAV 同步进来等）→ 回退到从字节
 //! 0 按行 offset 跳过的旧路径。本轮结束后写回新提示。
 //!
+//! 提示的读与写：**读**由调用方一次性预载整张表（`load_all_sync_resume`，类比
+//! `get_all_sync_states`）后逐文件传入 `hint`，驱动内不再逐文件查库——既让 mtime
+//! skip 前的身份校验零额外 per-file IO，也把稳态"每变化文件一次查询"收敛为每
+//! 周期一次全表查询。**写**由调用方在主库进度提交后调用 [`save_resume_hint`]，
+//! 其身份（inode + 尾部指纹）取自 outcome 里扫描时同一 fd 采集的值，而非按 path
+//! 二次读取，杜绝"提交后同路径被替换、save 阶段读到异源文件"的错配。
+//!
+//! mtime skip 与身份校验的顺序：mtime skip 发生在身份校验之前，但跳过前会用那次
+//! （本就为 mtime 复查而做的）stat 比对预载提示的 size/inode——保留旧 mtime 的
+//! 异源 replace（备份恢复 / rsync -t / 低精度 fs 同 tick）因此不会被永久漏过。跨
+//! 机器场景（只同步 cc-switch.db + sidecar、不同步会话文件本身）没有匹配提示或
+//! 会话文件由本机 app 写入（mtime 必然前进），走各自既有路径，不受影响。
+//!
 //! 文件身份校验的边界（诚实化）：Unix inode（`file_identity`）关闭
 //! rename-replace 类重写与跨机器同步进来的异源文件——inode 变了即证明这已
 //! 不是权威 offset 描述的那个文件。原地 `truncate+rewrite`（inode 不变；会话
@@ -76,9 +89,23 @@ pub(crate) struct JsonlScanOutcome {
     pending_tail_len: Option<i64>,
     /// 上述未终结尾部字节的 FNV-1a 指纹。
     pending_tail_hash: Option<i64>,
+    /// fix 1：`byte_pos` 边界前 ≤64 字节的 FNV-1a 尾部指纹，来自扫描时的
+    /// **同一 fd**（非按 path 重读）。与进度同一次读取采集，消除"提交后同路径
+    /// 被 rename-replace，save 阶段再按 path 重读到异源文件"造成的
+    /// 旧进度 + 新身份错配。
+    tail_hash: Option<i64>,
+    /// fix 1：被扫描文件的身份标识（Unix inode；其他平台 None），同样取自扫描时
+    /// 的 fd（`file.metadata()`），而非保存阶段按 path 二次 stat——保证 sidecar 存的
+    /// inode 与 offset/tail_hash 描述的是同一个物理文件。
+    file_identity: Option<i64>,
 }
 
 /// 基础校验：提示与主库权威行完全一致、且文件未被截断。
+///
+/// fix 2：提示改为由调用方从预载的内存 map 传入（`load_all_sync_resume` 一次
+/// 全表查询，类比 `get_all_sync_states`），本函数只做纯过滤，不再逐文件查库——
+/// 既让 skip 前的身份校验零额外 IO，也把稳态下"每变化文件一次 hint 查询"收敛为
+/// 每周期一次全表查询。
 ///
 /// 普通提示要求已越过至少一个换行边界（`last_offset > 0` 且 `byte_offset > 0`）。
 /// 但"边界=0 + 有待确认尾部"是单行无换行 JSONL 的合法状态：首轮记录
@@ -87,14 +114,12 @@ pub(crate) struct JsonlScanOutcome {
 /// 永远 mtime-1、不收敛。故提示携带 pending_tail（`pending_tail_len > 0`）时放行
 /// `0/0` 快照，让尾部收敛路径可达（`decide_resume` 对 `byte_offset == 0` 走空窗口
 /// 指纹即可）；无 pending_tail 的普通提示仍走原有的非零校验，语义不放宽。
-fn load_matching_resume_hint(
-    resume: Option<&ScanCacheStore>,
-    file_path: &str,
+fn filter_matching_resume_hint(
+    hint: Option<SyncResumeHint>,
     last_modified: i64,
     last_offset: i64,
 ) -> Option<SyncResumeHint> {
-    let store = resume?;
-    let hint = store.load_sync_resume(file_path).ok().flatten()?;
+    let hint = hint?;
     // 快照必须与主库权威行完全一致
     if hint.last_modified != last_modified || hint.last_line_offset != last_offset {
         return None;
@@ -176,14 +201,8 @@ fn decide_resume<S: DeserializeOwned>(
         return ResumeDecision::LineSkipFallback;
     };
 
-    // 尾部指纹：读 byte_offset 前的窗口与保存时比对
-    let window = byte_offset.min(TAIL_HASH_WINDOW);
-    let tail_ok = (|| {
-        file.seek(SeekFrom::Start(byte_offset - window)).ok()?;
-        let mut tail = vec![0u8; window as usize];
-        std::io::Read::read_exact(file, &mut tail).ok()?;
-        Some(fnv1a64(&tail) as i64 == expected)
-    })();
+    // 尾部指纹：读 byte_offset 前的窗口与保存时比对（读毕游标恰在 byte_offset）
+    let tail_ok = tail_hash_from_file(file, byte_offset).map(|hash| hash == expected);
     match tail_ok {
         // 指纹失配：边界前内容变了，文件被整体重写
         Some(false) => {
@@ -232,14 +251,17 @@ fn file_identity(_metadata: &fs::Metadata) -> Option<i64> {
     None
 }
 
-/// 读取文件 `byte_pos` 前的尾部窗口指纹（保存提示时使用）。对 append-only
-/// 文件而言这段字节此后不再变化，即使保存时文件仍在增长也稳定。
-fn compute_tail_hash(file_path: &str, byte_pos: u64) -> Option<i64> {
-    let mut file = fs::File::open(file_path).ok()?;
+/// 从已打开的文件句柄读取 `byte_pos` 前 ≤64 字节的尾部窗口指纹。
+///
+/// fix 1：读的是该 **fd 对应的 inode**，不受"同路径被 rename-replace"影响——
+/// 与旧的按 path 重开文件相比，扫描与采集身份始终指向同一个物理文件。
+/// 对 append-only 文件而言这段字节此后不再变化，即使采集时文件仍在增长也稳定。
+/// 读毕游标恰好停在 `byte_pos`（decide_resume 的续读依赖此后置条件）。
+fn tail_hash_from_file(file: &mut fs::File, byte_pos: u64) -> Option<i64> {
     let window = byte_pos.min(TAIL_HASH_WINDOW);
     file.seek(SeekFrom::Start(byte_pos - window)).ok()?;
     let mut tail = vec![0u8; window as usize];
-    std::io::Read::read_exact(&mut file, &mut tail).ok()?;
+    std::io::Read::read_exact(file, &mut tail).ok()?;
     Some(fnv1a64(&tail) as i64)
 }
 
@@ -252,12 +274,14 @@ fn compute_tail_hash(file_path: &str, byte_pos: u64) -> Option<i64> {
 /// 路径出现（字节续传命中时历史行根本不会被读到），供需要重放历史行来
 /// 重建状态的 app（如 Codex 的累计值 delta）使用；无此需求的 app 直接
 /// `if !is_new return`。空行与无效 UTF-8 行由驱动跳过，不进回调。
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn scan_jsonl_incremental<S, F>(
     file_path: &Path,
     file_mtime: i64,
     last_modified: i64,
     last_offset: i64,
-    resume: Option<&ScanCacheStore>,
+    hint: Option<SyncResumeHint>,
+    sidecar_available: bool,
     init_state: impl FnOnce() -> S,
     mut on_line: F,
 ) -> Result<Option<JsonlScanOutcome>, AppError>
@@ -268,13 +292,17 @@ where
     let file_path_str = file_path.to_string_lossy();
 
     // mtime：优先使用 walk 阶段的值，回退到一次 metadata 读取，
-    // 保留“元数据不可读即报错”语义。
+    // 保留“元数据不可读即报错”语义。`fresh_meta` 保留决定（潜在）skip 的那次
+    // stat，供 fix 2 的 skip 前身份校验复用——不额外多做一次 IO。
+    let mut fresh_meta: Option<fs::Metadata> = None;
     let mut file_modified = if file_mtime > 0 {
         file_mtime
     } else {
         let metadata = fs::metadata(file_path)
             .map_err(|e| AppError::Config(format!("无法读取文件元数据: {e}")))?;
-        metadata_modified_nanos(&metadata)
+        let modified = metadata_modified_nanos(&metadata);
+        fresh_meta = Some(metadata);
+        modified
     };
 
     // walk 阶段取得的 mtime 可能在长同步期间过期：文件在 walk 之后、处理之前被
@@ -284,29 +312,60 @@ where
     if file_mtime > 0 && file_modified <= last_modified {
         if let Ok(metadata) = fs::metadata(file_path) {
             file_modified = metadata_modified_nanos(&metadata);
+            fresh_meta = Some(metadata);
         }
     }
 
-    // 文件未变化则跳过
+    // 匹配的续传提示（快照与主库权威行一致）：skip 前身份校验与后续
+    // decide_resume 共用。提示由调用方从预载 map 传入（fix 2），此处纯过滤。
+    let matched_hint = filter_matching_resume_hint(hint, last_modified, last_offset);
+
+    // 文件未变化则跳过——但 fix 2：先做 skip 前身份校验。
     if file_modified <= last_modified {
-        return Ok(None);
+        // 保留旧 mtime 的异源 replace（备份恢复 / rsync -t / 低精度 fs 同 tick）会让
+        // 本机 mtime 不前进 → 单纯 mtime-skip 会把异源文件永久视作未变化。跳过前用
+        // 已读到的 metadata（零额外 IO：这次 stat 本就为 mtime 复查而做）比对匹配
+        // 提示的身份：文件比权威 offset 短（截断/异源）或 Unix inode 变化
+        // （rename-replace / 跨机器异源）都证明这不是权威 offset 描述的那个文件 →
+        // 不 skip，继续扫描（decide_resume 会 RescanFromZero，request_id 去重兜底）。
+        // 无匹配提示或无 metadata（读取失败）时无从证伪 → 维持既有 mtime-skip
+        // （跨机器只同步 db、不同步会话文件，是记录在案的已知边界）。
+        let identity_suspicious = match (matched_hint.as_ref(), fresh_meta.as_ref()) {
+            (Some(h), Some(meta)) => {
+                let shrunk = h.byte_offset > 0 && (meta.len() as i64) < h.byte_offset;
+                let inode_changed = match h.file_identity {
+                    Some(expected) => {
+                        file_identity(meta).is_some_and(|current| current != expected)
+                    }
+                    None => false,
+                };
+                shrunk || inode_changed
+            }
+            _ => false,
+        };
+        if !identity_suspicious {
+            return Ok(None);
+        }
+        log::debug!(
+            "[SYNC-DRIVER] mtime 未前进但身份可疑（截断/inode 变化），不 skip 继续扫描: {file_path_str}"
+        );
     }
 
     let mut file =
         fs::File::open(file_path).map_err(|e| AppError::Config(format!("无法打开文件: {e}")))?;
     let file_len = file.metadata().map(|m| m.len()).unwrap_or(0);
 
-    // 字节续传决策（指纹校验可能移动过游标，非 Resume 路径必须归零）
-    let hint = load_matching_resume_hint(resume, &file_path_str, last_modified, last_offset);
     // 提示携带的"待确认尾部"（上轮以不完整尾行结束时记录）。只在 Resume
     // 决策下用于尾部稳定性确认；decide_resume 会消费 hint，先取出这两列。
     let pending_tail =
-        hint.as_ref()
+        matched_hint
+            .as_ref()
             .and_then(|h| match (h.pending_tail_len, h.pending_tail_hash) {
                 (Some(len), Some(hash)) if len > 0 => Some((len as u64, hash)),
                 _ => None,
             });
-    let decision = decide_resume::<S>(&mut file, file_len, hint, &file_path_str);
+    // 字节续传决策（指纹校验可能移动过游标，非 Resume 路径必须归零）
+    let decision = decide_resume::<S>(&mut file, file_len, matched_hint, &file_path_str);
 
     // effective_last_offset：本轮用于 is_new 判断的行 offset。文件身份失效
     // 时权威行 offset 描述的是旧文件，必须归零全量重扫，否则新文件的前
@@ -419,17 +478,25 @@ where
     // 若尾部两轮不变（永远无换行的最终行），驱动会走 try_converge_stable_tail
     // 收敛：改记真实 mtime、清空 pending_tail，从此走 mtime skip 不再复查。
     // 关键前提：mtime-1 复查依赖 sidecar 提示才能收敛（下轮借提示从边界 seek、
-    // 只重读尾部，尾部两轮稳定时收敛为真实 mtime）。sidecar 不可用（resume 为
-    // None）时没有提示可续，一律 -1 会让末行无换行的文件每轮从旧进度全量重读、
-    // 永不收敛，反而更糟。故仅在有 sidecar 时才 -1；无 sidecar 时记录真实 mtime，
+    // 只重读尾部，尾部两轮稳定时收敛为真实 mtime）。sidecar 不可用
+    // （`sidecar_available == false`）时没有提示可续，一律 -1 会让末行无换行的文件
+    // 每轮从旧进度全量重读、永不收敛，反而更糟。故仅在有 sidecar 时才 -1；无 sidecar
+    // 时记录真实 mtime，
     // 回到 pending_tail 机制引入前的旧语义——同一 mtime tick 内补全该行的竞态
     // 窗口不再被关闭，这是 sidecar 不可用时可接受的退化。
-    let recorded_modified = if saw_incomplete_tail && resume.is_some() {
+    let recorded_modified = if saw_incomplete_tail && sidecar_available {
         log::debug!("[SYNC-DRIVER] 末尾存在不完整行，记录 mtime-1 以便下轮复查: {file_path_str}");
         file_modified - 1
     } else {
         file_modified
     };
+
+    // fix 1：身份（inode + 边界尾部指纹）取自扫描时的同一 fd，而非保存阶段按
+    // path 二次读取——即便提交后同路径被 rename-replace，写回 sidecar 的仍是本轮
+    // 真正扫描的那个物理文件的身份，不会出现"旧进度 + 新身份"的错配。
+    let file = reader.get_mut();
+    let file_identity_val = file.metadata().ok().and_then(|m| file_identity(&m));
+    let tail_hash_val = tail_hash_from_file(file, committed_byte_pos);
 
     log::debug!(
         "[SYNC-DRIVER] 扫描完成 lines={committed_line_offset} bytes={committed_byte_pos} incomplete_tail={saw_incomplete_tail}: {file_path_str}"
@@ -442,6 +509,8 @@ where
         resume_state_json,
         pending_tail_len,
         pending_tail_hash,
+        tail_hash: tail_hash_val,
+        file_identity: file_identity_val,
     }))
 }
 
@@ -480,6 +549,11 @@ fn try_converge_stable_tail<S: Serialize>(
     match tail_ok {
         Some(true) => {
             log::debug!("[SYNC-DRIVER] 尾部两轮稳定，收敛（永远无换行的最终行）: {file_path_str}");
+            // fix 1：收敛进度停在边界，身份亦取边界处——tail_hash 覆盖 byte_offset
+            // 前窗口（读毕游标复位到 byte_offset），inode 取自同一 fd，与 outcome 的
+            // (line_offset, byte_pos) 严格对应，不写出错配值。
+            let tail_hash_val = tail_hash_from_file(file, byte_offset);
+            let file_identity_val = file.metadata().ok().and_then(|m| file_identity(&m));
             Some(JsonlScanOutcome {
                 line_offset: boundary_line_offset,
                 byte_pos: byte_offset,
@@ -487,6 +561,8 @@ fn try_converge_stable_tail<S: Serialize>(
                 resume_state_json: serde_json::to_string(state).ok(),
                 pending_tail_len: None,
                 pending_tail_hash: None,
+                tail_hash: tail_hash_val,
+                file_identity: file_identity_val,
             })
         }
         // 尾部变了或读取抖动：复位游标，按普通续传处理（本轮若仍以不完整
@@ -514,15 +590,14 @@ pub(crate) fn save_resume_hint(
         last_line_offset: outcome.line_offset,
         byte_offset: outcome.byte_pos as i64,
         state: outcome.resume_state_json.clone(),
-        tail_hash: compute_tail_hash(file_path_str, outcome.byte_pos),
-        // 收敛 outcome 携带 None：写回 NULL 清空待确认尾部；下轮不再复查。
+        // fix 1：尾部指纹与文件 inode 均来自扫描时的同一 fd（见 outcome 采集处），
+        // 不再按 path 重读——消除"提交后同路径被 rename-replace，save 阶段读到异源
+        // 文件"造成的 旧进度 + 新身份 错配。收敛 outcome 的 pending_* 为 None：
+        // 写回 NULL 清空待确认尾部，下轮不再复查。
+        tail_hash: outcome.tail_hash,
         pending_tail_len: outcome.pending_tail_len,
         pending_tail_hash: outcome.pending_tail_hash,
-        // 记录当前文件 inode（Unix；其他平台 None）：下轮续传前比对，inode 变了
-        // 即 rename-replace 类重写 / 跨机器异源文件，忽略旧 offset 全量重扫。
-        file_identity: fs::metadata(file_path_str)
-            .ok()
-            .and_then(|m| file_identity(&m)),
+        file_identity: outcome.file_identity,
     };
     if let Err(err) = store.save_sync_resume(&hint) {
         log::debug!("[SESSION-SYNC] 写入字节续传提示失败 ({file_path_str}): {err}");
@@ -568,13 +643,17 @@ mod tests {
         last_offset: i64,
         resume: Option<&ScanCacheStore>,
     ) -> Observed {
+        // fix 2：提示改为预载后传入。测试保持 `Some(&store)` 接口不变——此处从 store
+        // 现取该文件的提示（一次 load 等价于生产侧从预载 map 的一次查找）。
+        let hint = resume.and_then(|s| s.load_sync_resume(&path.to_string_lossy()).ok().flatten());
         let mut seen = Vec::new();
         let outcome = scan_jsonl_incremental(
             path,
             file_mtime,
             last_modified,
             last_offset,
-            resume,
+            hint,
+            resume.is_some(),
             NoState::default,
             |_state, line, is_new| seen.push((line.to_string(), is_new)),
         )
@@ -1058,6 +1137,79 @@ mod tests {
             second.seen,
             vec![("l3".to_string(), true)],
             "无 file_identity 时应沿用 tail_hash 续传，只读新行"
+        );
+        assert_eq!(second.out().line_offset, 3);
+    }
+
+    /// fix 1：outcome 携带的 file_identity 必须等于被扫描文件的真实 inode（取自
+    /// 扫描 fd，而非保存阶段按 path 二次 stat），tail_hash 亦被采集。#[cfg(unix)]。
+    #[cfg(unix)]
+    #[test]
+    fn outcome_carries_scanned_file_real_inode() {
+        use std::os::unix::fs::MetadataExt;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("s.jsonl");
+        std::fs::write(&path, "l1\nl2\n").expect("write");
+        let real_inode = std::fs::metadata(&path).expect("metadata").ino() as i64;
+
+        // resume=None 也应采集身份（采集在驱动内无条件进行，与 sidecar 无关）
+        let observed = scan_at(&path, 1_000, 0, 0, None);
+        assert_eq!(
+            observed.out().file_identity,
+            Some(real_inode),
+            "outcome 的 file_identity 应等于被扫描文件真实 inode"
+        );
+        assert!(
+            observed.out().tail_hash.is_some(),
+            "outcome 应采集边界尾部指纹"
+        );
+    }
+
+    /// fix 2：保留旧 mtime 的异源 rename-replace（备份恢复 / rsync -t / 低精度 fs
+    /// 同 tick）。权威 mtime 取一个远大于任何真实文件 mtime 的值，保证替换后的
+    /// 真实 mtime 必然 <= 它 → 走 mtime-skip 候选路径，真正考验 skip 前身份校验：
+    /// 匹配提示的 inode 与当前文件不符 → 不 skip 继续扫描（decide_resume 走
+    /// RescanFromZero），异源文件被完整重扫而非永久漏过。#[cfg(unix)]（inode 校验）。
+    #[cfg(unix)]
+    #[test]
+    fn stale_mtime_replace_with_new_inode_bypasses_skip() {
+        // 远大于任何真实文件 mtime（~1.7e18ns）、且 < i64::MAX。
+        const BIG_MTIME: i64 = 9_000_000_000_000_000_000;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("s.jsonl");
+        std::fs::write(&path, "l1\nl2\n").expect("write");
+        let store = ScanCacheStore::in_memory().expect("store");
+
+        // 首轮：权威进度 (mtime=BIG_MTIME, offset=2, byte=6)，提示记真实 inode。
+        let first = scan_at(&path, BIG_MTIME, 0, 0, Some(&store));
+        assert_eq!(first.out().byte_pos, 6);
+        assert_eq!(first.out().file_modified, BIG_MTIME);
+        save_resume_hint(Some(&store), &path.to_string_lossy(), first.out());
+
+        // rename-replace 成异源文件（必然新 inode），内容更长（size >= byte_offset，
+        // 只有 inode 校验能识破，size 截断分支不触发），真实 mtime << BIG_MTIME。
+        let repl = dir.path().join("repl.jsonl");
+        std::fs::write(&repl, "n1\nn2\nn3\n").expect("write repl");
+        std::fs::rename(&repl, &path).expect("rename-replace");
+
+        // walk mtime 传 BIG_MTIME（<= 权威）→ 触发新鲜 mtime 复查，读到真实
+        // （小）mtime <= BIG_MTIME → skip 候选 → skip 前 inode 校验发现异源。
+        let second = scan_at(
+            &path,
+            BIG_MTIME,
+            first.out().file_modified,
+            first.out().line_offset,
+            Some(&store),
+        );
+        // 未被 mtime-skip：inode 失配 → RescanFromZero，新文件全部行 is_new。
+        assert_eq!(
+            second.seen,
+            vec![
+                ("n1".to_string(), true),
+                ("n2".to_string(), true),
+                ("n3".to_string(), true)
+            ],
+            "保留旧 mtime 的异源 replace 不应被 mtime-skip 漏过"
         );
         assert_eq!(second.out().line_offset, 3);
     }
