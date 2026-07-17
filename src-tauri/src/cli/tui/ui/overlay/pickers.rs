@@ -20,11 +20,11 @@ pub(super) fn render_claude_model_picker_overlay(
     column: ClaudeModelPickerColumn,
     editing: bool,
 ) {
-    // Keep the percentage-based width, but cap the height to the four role rows
+    // Keep the percentage-based width, but cap the height to the three role rows
     // rather than filling 62% of the screen (which left a large empty table).
-    // Height = outer borders(2) + key bar(1) + top gap(1) + table[border(2)+header(1)+4 rows] + hint(3).
+    // Height = outer borders(2) + key bar(1) + top gap(1) + table[border(2)+header(1)+3 rows] + hint(3).
     let wide = centered_rect(OVERLAY_MD.0, OVERLAY_MD.1, content_area);
-    let desired_h = 14u16.min(content_area.height);
+    let desired_h = 13u16.min(content_area.height);
     let area = Rect {
         x: wide.x,
         width: wide.width,
@@ -73,7 +73,6 @@ pub(super) fn render_claude_model_picker_overlay(
 
     if let Some(FormState::ProviderAdd(provider)) = app.form.as_ref() {
         let labels = [
-            texts::tui_claude_reasoning_model_label(),
             texts::tui_claude_default_haiku_model_label(),
             texts::tui_claude_default_sonnet_model_label(),
             texts::tui_claude_default_opus_model_label(),

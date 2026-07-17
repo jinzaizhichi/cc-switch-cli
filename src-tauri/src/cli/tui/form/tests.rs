@@ -2160,7 +2160,6 @@ fn provider_add_form_claude_from_provider_backfills_models_with_legacy_fallback(
 
     let form = ProviderAddFormState::from_provider(AppType::Claude, &provider);
     assert_eq!(form.claude_model.value, "model-main");
-    assert_eq!(form.claude_reasoning_model.value, "model-reasoning");
     assert_eq!(form.claude_haiku_model.value, "model-small-fast");
     assert_eq!(form.claude_sonnet_model.value, "model-sonnet-explicit");
     assert_eq!(form.claude_opus_model.value, "model-main");
@@ -2183,8 +2182,8 @@ fn provider_add_form_claude_one_m_marker_loads_and_saves_canonically() {
     let mut form = ProviderAddFormState::from_provider(AppType::Claude, &provider);
     assert_eq!(form.claude_sonnet_model.value, "deepseek-v4");
     assert_eq!(form.claude_opus_model.value, "opus-pro");
+    assert!(form.claude_model_one_m_enabled(1));
     assert!(form.claude_model_one_m_enabled(2));
-    assert!(form.claude_model_one_m_enabled(3));
 
     form.mark_claude_model_config_touched();
     let saved = form.to_provider_json_value();
@@ -2221,9 +2220,8 @@ fn provider_add_form_claude_one_m_fallback_and_untouched_storage_are_preserved()
     let mut form = ProviderAddFormState::from_provider(AppType::Claude, &provider);
     assert_eq!(form.claude_sonnet_model.value, "fallback-model");
     assert_eq!(form.claude_opus_model.value, "fallback-model");
+    assert!(form.claude_model_one_m_enabled(1));
     assert!(form.claude_model_one_m_enabled(2));
-    assert!(form.claude_model_one_m_enabled(3));
-    assert_eq!(form.claude_reasoning_model.value, "reasoning[1M]");
     assert_eq!(form.claude_haiku_model.value, "haiku[1m]");
 
     form.name.set("Provider One Updated");
@@ -2253,23 +2251,22 @@ fn provider_add_form_claude_one_m_toggle_and_fill_all_follow_role_semantics() {
     let mut form = ProviderAddFormState::new(AppType::Claude);
     form.claude_sonnet_model.set("model-sonnet");
 
-    assert!(form.toggle_claude_model_one_m(2));
-    assert_eq!(form.claude_model_value_for_config(2), "model-sonnet[1M]");
-    assert!(form.fill_claude_models_from(2));
-    assert_eq!(form.claude_reasoning_model.value, "model-sonnet");
+    assert!(form.toggle_claude_model_one_m(1));
+    assert_eq!(form.claude_model_value_for_config(1), "model-sonnet[1M]");
+    assert!(form.fill_claude_models_from(1));
     assert_eq!(form.claude_haiku_model.value, "model-sonnet");
+    assert!(form.claude_model_one_m_enabled(1));
     assert!(form.claude_model_one_m_enabled(2));
-    assert!(form.claude_model_one_m_enabled(3));
 
     form.claude_haiku_model.set("legacy-model[1M]");
-    assert!(form.fill_claude_models_from(1));
+    assert!(form.fill_claude_models_from(0));
     assert_eq!(form.claude_sonnet_model.value, "legacy-model");
+    assert!(!form.claude_model_one_m_enabled(1));
     assert!(!form.claude_model_one_m_enabled(2));
-    assert!(!form.claude_model_one_m_enabled(3));
 
     form.claude_opus_model.set("");
-    assert!(!form.toggle_claude_model_one_m(3));
-    assert_eq!(form.claude_model_value_for_config(3), "");
+    assert!(!form.toggle_claude_model_one_m(2));
+    assert_eq!(form.claude_model_value_for_config(2), "");
 }
 
 #[test]
@@ -2286,7 +2283,6 @@ fn provider_add_form_claude_writes_new_model_keys_and_removes_small_fast() {
         }
     });
     form.claude_model.set("model-main");
-    form.claude_reasoning_model.set("model-reasoning");
     form.claude_haiku_model.set("model-haiku");
     form.claude_sonnet_model.set("model-sonnet");
     form.claude_opus_model.set("model-opus");
@@ -2300,11 +2296,7 @@ fn provider_add_form_claude_writes_new_model_keys_and_removes_small_fast() {
         env.get("ANTHROPIC_MODEL").and_then(|value| value.as_str()),
         Some("model-main")
     );
-    assert_eq!(
-        env.get("ANTHROPIC_REASONING_MODEL")
-            .and_then(|value| value.as_str()),
-        Some("model-reasoning")
-    );
+    assert!(env.get("ANTHROPIC_REASONING_MODEL").is_none());
     assert_eq!(
         env.get("ANTHROPIC_DEFAULT_HAIKU_MODEL")
             .and_then(|value| value.as_str()),
@@ -2348,7 +2340,11 @@ fn provider_add_form_claude_empty_model_fields_remove_env_keys() {
         .as_object()
         .expect("settingsConfig.env should be object");
     assert!(env.get("ANTHROPIC_MODEL").is_none());
-    assert!(env.get("ANTHROPIC_REASONING_MODEL").is_none());
+    assert_eq!(
+        env.get("ANTHROPIC_REASONING_MODEL").and_then(Value::as_str),
+        Some("old-reasoning"),
+        "legacy reasoning values remain opaque provider config"
+    );
     assert!(env.get("ANTHROPIC_DEFAULT_HAIKU_MODEL").is_none());
     assert!(env.get("ANTHROPIC_DEFAULT_SONNET_MODEL").is_none());
     assert!(env.get("ANTHROPIC_DEFAULT_OPUS_MODEL").is_none());

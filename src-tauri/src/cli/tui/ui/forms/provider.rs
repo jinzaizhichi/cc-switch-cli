@@ -106,7 +106,6 @@ fn provider_json_preview_source_fits(
         provider.claude_api_key.value.as_str(),
         provider.claude_base_url.value.as_str(),
         provider.claude_model.value.as_str(),
-        provider.claude_reasoning_model.value.as_str(),
         provider.claude_haiku_model.value.as_str(),
         provider.claude_sonnet_model.value.as_str(),
         provider.claude_opus_model.value.as_str(),
@@ -733,8 +732,9 @@ fn render_provider_preview(
     } else {
         // JSON Preview (settingsConfig only, matching upstream UI)
         if !provider_json_preview_source_fits(provider, &data.config.common_snippet) {
-            render_form_json_preview(
+            render_form_json_preview_with_title(
                 frame,
+                texts::tui_provider_config_title(),
                 texts::tui_preview_omitted_too_large(),
                 0,
                 matches!(provider.focus, FormFocus::JsonPreview),
@@ -764,14 +764,14 @@ fn render_provider_preview(
             &data.config.common_snippet,
             provider.include_common_config,
         );
-        render_form_json_preview_with_highlights(
+        render_form_json_preview_with_highlights_and_title(
             frame,
             &json_text,
             provider.json_scroll,
             matches!(provider.focus, FormFocus::JsonPreview),
             area,
             theme,
-            &highlighted_lines,
+            (texts::tui_provider_config_title(), &highlighted_lines),
         );
     }
 }

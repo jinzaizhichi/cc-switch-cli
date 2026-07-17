@@ -171,14 +171,9 @@ impl ProviderAddFormState {
                     );
                 }
                 if self.claude_model_config_touched {
-                    let sonnet_model = self.claude_model_value_for_config(2);
-                    let opus_model = self.claude_model_value_for_config(3);
+                    let sonnet_model = self.claude_model_value_for_config(1);
+                    let opus_model = self.claude_model_value_for_config(2);
                     set_or_remove_trimmed(env_obj, "ANTHROPIC_MODEL", &self.claude_model.value);
-                    set_or_remove_trimmed(
-                        env_obj,
-                        "ANTHROPIC_REASONING_MODEL",
-                        &self.claude_reasoning_model.value,
-                    );
                     set_or_remove_trimmed(
                         env_obj,
                         "ANTHROPIC_DEFAULT_HAIKU_MODEL",

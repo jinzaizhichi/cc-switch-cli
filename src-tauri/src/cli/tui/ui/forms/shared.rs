@@ -399,31 +399,52 @@ pub(crate) fn render_form_json_preview(
     area: Rect,
     theme: &super::theme::Theme,
 ) {
-    render_form_json_preview_with_highlights(
+    render_form_json_preview_with_highlights_and_title(
         frame,
         json_text,
         scroll,
         active,
         area,
         theme,
-        &BTreeSet::new(),
+        (texts::tui_form_json_title(), &BTreeSet::new()),
     );
 }
 
-pub(crate) fn render_form_json_preview_with_highlights(
+pub(crate) fn render_form_json_preview_with_title(
+    frame: &mut Frame<'_>,
+    title: &str,
+    json_text: &str,
+    scroll: usize,
+    active: bool,
+    area: Rect,
+    theme: &super::theme::Theme,
+) {
+    render_form_json_preview_with_highlights_and_title(
+        frame,
+        json_text,
+        scroll,
+        active,
+        area,
+        theme,
+        (title, &BTreeSet::new()),
+    );
+}
+
+pub(crate) fn render_form_json_preview_with_highlights_and_title(
     frame: &mut Frame<'_>,
     json_text: &str,
     scroll: usize,
     active: bool,
     area: Rect,
     theme: &super::theme::Theme,
-    highlighted_lines: &BTreeSet<usize>,
+    title_and_highlights: (&str, &BTreeSet<usize>),
 ) {
+    let (title, highlighted_lines) = title_and_highlights;
     let json_block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Plain)
         .border_style(focus_block_style(active, theme))
-        .title(format!(" {} ", texts::tui_form_json_title()));
+        .title(format!(" {title} "));
     frame.render_widget(json_block.clone(), area);
     let json_inner = json_block.inner(area);
 

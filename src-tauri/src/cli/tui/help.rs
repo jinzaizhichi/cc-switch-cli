@@ -715,11 +715,18 @@ fn provider_preview_help(app_type: AppType, section: Option<CodexPreviewSection>
                 "This previews the Codex config.toml to be saved.\nAdvanced settings such as local routing, reasoning capability, model catalog, Goal mode, and remote compaction are reflected here. Presets are usually configured automatically; custom providers are inferred from name and URL, so manual edits are needed only when detection is wrong.",
             ),
         ),
-        _ => HelpContent::new(
-            texts::tui_form_json_title(),
+        (AppType::Claude, _) => HelpContent::new(
+            texts::tui_provider_config_title(),
             help_lines(
-                "右侧预览展示保存后的配置形状。按 Enter 可打开编辑器进行高级修改。",
-                "The right preview shows the saved config shape. Press Enter to open the editor for advanced edits.",
+                "这里预览将保存的供应商配置。Proxy 开启时，Claude 实际读取的 settings.json 会由代理临时接管，因此会显示本地代理地址、占位凭据和模型映射，而不是这里的真实上游配置。按 Enter 可打开编辑器进行高级修改。",
+                "This previews the stored provider config. While Proxy is on, Claude's live settings.json is temporarily managed by the proxy, so it contains the local proxy URL, placeholder credentials, and model mappings instead of the real upstream config shown here. Press Enter to open the advanced editor.",
+            ),
+        ),
+        _ => HelpContent::new(
+            texts::tui_provider_config_title(),
+            help_lines(
+                "右侧预览展示将保存的供应商配置。按 Enter 可打开编辑器进行高级修改。",
+                "The right preview shows the provider config to be saved. Press Enter to open the advanced editor.",
             ),
         ),
     }

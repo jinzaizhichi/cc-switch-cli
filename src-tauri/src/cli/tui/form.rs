@@ -490,7 +490,6 @@ pub struct ProviderAddFormState {
     pub claude_base_url: TextInput,
     pub claude_api_format: ClaudeApiFormat,
     pub claude_model: TextInput,
-    pub claude_reasoning_model: TextInput,
     pub claude_haiku_model: TextInput,
     pub claude_sonnet_model: TextInput,
     pub claude_opus_model: TextInput,

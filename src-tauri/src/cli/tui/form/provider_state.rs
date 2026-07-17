@@ -177,7 +177,6 @@ impl ProviderAddFormState {
                 ClaudeApiFormat::Anthropic
             },
             claude_model: TextInput::new(""),
-            claude_reasoning_model: TextInput::new(""),
             claude_haiku_model: TextInput::new(""),
             claude_sonnet_model: TextInput::new(""),
             claude_opus_model: TextInput::new(""),
@@ -1762,44 +1761,42 @@ impl ProviderAddFormState {
         None
     }
 
-    // The model-mapping sub-page exposes only the four role models; the main
+    // The model-mapping sub-page exposes only the three role models; the main
     // model (ANTHROPIC_MODEL) is edited via the top-level ClaudeFallbackModel row.
     pub fn claude_model_input(&self, index: usize) -> Option<&TextInput> {
         match index {
-            0 => Some(&self.claude_reasoning_model),
-            1 => Some(&self.claude_haiku_model),
-            2 => Some(&self.claude_sonnet_model),
-            3 => Some(&self.claude_opus_model),
+            0 => Some(&self.claude_haiku_model),
+            1 => Some(&self.claude_sonnet_model),
+            2 => Some(&self.claude_opus_model),
             _ => None,
         }
     }
 
     pub fn claude_model_input_mut(&mut self, index: usize) -> Option<&mut TextInput> {
         match index {
-            0 => Some(&mut self.claude_reasoning_model),
-            1 => Some(&mut self.claude_haiku_model),
-            2 => Some(&mut self.claude_sonnet_model),
-            3 => Some(&mut self.claude_opus_model),
+            0 => Some(&mut self.claude_haiku_model),
+            1 => Some(&mut self.claude_sonnet_model),
+            2 => Some(&mut self.claude_opus_model),
             _ => None,
         }
     }
 
     pub fn claude_model_supports_one_m(index: usize) -> bool {
-        matches!(index, 2 | 3)
+        matches!(index, 1 | 2)
     }
 
     pub fn claude_model_one_m_enabled(&self, index: usize) -> bool {
         match index {
-            2 => self.claude_sonnet_one_m,
-            3 => self.claude_opus_one_m,
+            1 => self.claude_sonnet_one_m,
+            2 => self.claude_opus_one_m,
             _ => false,
         }
     }
 
     fn set_claude_model_one_m_enabled(&mut self, index: usize, enabled: bool) {
         match index {
-            2 => self.claude_sonnet_one_m = enabled,
-            3 => self.claude_opus_one_m = enabled,
+            1 => self.claude_sonnet_one_m = enabled,
+            2 => self.claude_opus_one_m = enabled,
             _ => {}
         }
     }
@@ -1907,7 +1904,7 @@ impl ProviderAddFormState {
         let (model, _) = split_claude_one_m_marker(&source.value);
         let one_m = Self::claude_model_supports_one_m(source_index)
             && self.claude_model_one_m_enabled(source_index);
-        for index in 0..4 {
+        for index in 0..3 {
             if let Some(input) = self.claude_model_input_mut(index) {
                 input.set(model.clone());
             }
@@ -1922,7 +1919,6 @@ impl ProviderAddFormState {
 
     pub fn claude_model_configured_count(&self) -> usize {
         [
-            &self.claude_reasoning_model,
             &self.claude_haiku_model,
             &self.claude_sonnet_model,
             &self.claude_opus_model,

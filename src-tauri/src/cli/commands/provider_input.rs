@@ -748,7 +748,6 @@ fn build_provider_template_settings_config(
             "env": {
                 "ANTHROPIC_BASE_URL": "https://chatgpt.com/backend-api/codex",
                 "ANTHROPIC_MODEL": "gpt-5.4",
-                "ANTHROPIC_REASONING_MODEL": "gpt-5.4",
                 "ANTHROPIC_DEFAULT_HAIKU_MODEL": "gpt-5.4-mini",
                 "ANTHROPIC_DEFAULT_SONNET_MODEL": "gpt-5.4",
                 "ANTHROPIC_DEFAULT_OPUS_MODEL": "gpt-5.4",
@@ -1770,7 +1769,6 @@ requires_openai_auth = true
             keys,
             vec![
                 "ANTHROPIC_MODEL",
-                "ANTHROPIC_REASONING_MODEL",
                 "ANTHROPIC_DEFAULT_HAIKU_MODEL",
                 "ANTHROPIC_DEFAULT_SONNET_MODEL",
                 "ANTHROPIC_DEFAULT_OPUS_MODEL",
@@ -1780,7 +1778,7 @@ requires_openai_auth = true
     }
 
     #[test]
-    fn cli_claude_prompt_writes_reasoning_model_when_model_config_is_supplied() {
+    fn cli_claude_prompt_writes_supported_models_when_model_config_is_supplied() {
         let cfg = build_claude_settings_config_from_prompt(
             None,
             ClaudeApiKeyField::AuthToken,
@@ -1788,10 +1786,6 @@ requires_openai_auth = true
             "https://api.anthropic.com",
             [
                 ("ANTHROPIC_MODEL", Some("model-main".to_string())),
-                (
-                    "ANTHROPIC_REASONING_MODEL",
-                    Some("model-reasoning".to_string()),
-                ),
                 (
                     "ANTHROPIC_DEFAULT_HAIKU_MODEL",
                     Some("model-haiku".to_string()),
@@ -1809,7 +1803,7 @@ requires_openai_auth = true
         );
 
         assert_eq!(cfg["env"]["ANTHROPIC_MODEL"], "model-main");
-        assert_eq!(cfg["env"]["ANTHROPIC_REASONING_MODEL"], "model-reasoning");
+        assert!(cfg["env"].get("ANTHROPIC_REASONING_MODEL").is_none());
         assert_eq!(cfg["env"]["ANTHROPIC_DEFAULT_HAIKU_MODEL"], "model-haiku");
         assert_eq!(cfg["env"]["ANTHROPIC_DEFAULT_SONNET_MODEL"], "model-sonnet");
         assert_eq!(cfg["env"]["ANTHROPIC_DEFAULT_OPUS_MODEL"], "model-opus");
@@ -4009,16 +4003,11 @@ struct ClaudeModelPromptField {
     placeholder: &'static str,
 }
 
-fn claude_model_prompt_fields() -> [ClaudeModelPromptField; 5] {
+fn claude_model_prompt_fields() -> [ClaudeModelPromptField; 4] {
     [
         ClaudeModelPromptField {
             label: texts::model_default_label(),
             env_key: "ANTHROPIC_MODEL",
-            placeholder: texts::model_sonnet_placeholder(),
-        },
-        ClaudeModelPromptField {
-            label: texts::tui_claude_reasoning_model_label(),
-            env_key: "ANTHROPIC_REASONING_MODEL",
             placeholder: texts::model_sonnet_placeholder(),
         },
         ClaudeModelPromptField {

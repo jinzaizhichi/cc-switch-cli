@@ -183,13 +183,12 @@ fn claude_model_picker_renders_role_scoped_one_m_controls_and_dynamic_keys() {
     app.route = Route::Providers;
     app.focus = Focus::Content;
     let mut form = crate::cli::tui::form::ProviderAddFormState::new(AppType::Claude);
-    form.claude_reasoning_model.set("reasoning-model");
     form.claude_haiku_model.set("haiku-model");
-    form.set_claude_model_from_config(2, "sonnet-model[1M]");
-    form.set_claude_model_from_config(3, "opus-model");
+    form.set_claude_model_from_config(1, "sonnet-model[1M]");
+    form.set_claude_model_from_config(2, "opus-model");
     app.form = Some(FormState::ProviderAdd(form));
     app.overlay = Overlay::ClaudeModelPicker {
-        selected: 2,
+        selected: 1,
         column: ClaudeModelPickerColumn::OneM,
         editing: false,
     };
@@ -205,7 +204,11 @@ fn claude_model_picker_renders_role_scoped_one_m_controls_and_dynamic_keys() {
     assert!(one_m.contains("1M"), "{one_m}");
     assert!(one_m.contains("[x]"), "{one_m}");
     assert!(one_m.contains("[ ]"), "{one_m}");
-    assert!(one_m.matches('—').count() >= 2, "{one_m}");
+    assert!(one_m.matches('—').count() >= 1, "{one_m}");
+    assert!(one_m.contains("Default Haiku Model"), "{one_m}");
+    assert!(one_m.contains("Default Sonnet Model"), "{one_m}");
+    assert!(one_m.contains("Default Opus Model"), "{one_m}");
+    assert!(!one_m.contains("Reasoning Model"), "{one_m}");
     assert!(one_m.contains("switch column"), "{one_m}");
     assert!(one_m.contains("toggle"), "{one_m}");
     assert!(one_m.contains("Enter toggle"), "{one_m}");
@@ -217,7 +220,7 @@ fn claude_model_picker_renders_role_scoped_one_m_controls_and_dynamic_keys() {
     assert!(!one_m.contains("fill all"), "{one_m}");
 
     app.overlay = Overlay::ClaudeModelPicker {
-        selected: 2,
+        selected: 1,
         column: ClaudeModelPickerColumn::Model,
         editing: false,
     };
@@ -248,12 +251,12 @@ fn claude_model_picker_keeps_one_m_visible_and_truncates_on_narrow_terminals() {
     app.focus = Focus::Content;
     let mut form = crate::cli::tui::form::ProviderAddFormState::new(AppType::Claude);
     form.set_claude_model_from_config(
-        2,
+        1,
         "an-extremely-long-provider-model-name-with-a-tail-that-must-not-show[1M]",
     );
     app.form = Some(FormState::ProviderAdd(form));
     app.overlay = Overlay::ClaudeModelPicker {
-        selected: 2,
+        selected: 1,
         column: ClaudeModelPickerColumn::OneM,
         editing: false,
     };
@@ -350,6 +353,7 @@ fn provider_inline_api_key_edit_renders_plaintext() {
         40,
     ));
     assert!(all.contains(secret), "{all}");
+    assert!(all.contains("Provider Config"), "{all}");
     assert!(!all.contains("[redacted]"), "{all}");
     assert!(!all.contains("apply & next"), "{all}");
     assert!(!all.contains("apply & previous"), "{all}");
@@ -747,18 +751,24 @@ fn provider_form_uses_one_pane_when_compact_and_two_when_wide() {
 
     let compact_fields = all_text(&render_with_size(&app, &data, 80, 35));
     assert!(compact_fields.contains("┌ Fields "), "{compact_fields}");
-    assert!(!compact_fields.contains("┌ JSON "), "{compact_fields}");
+    assert!(
+        !compact_fields.contains("┌ Provider Config "),
+        "{compact_fields}"
+    );
 
     if let Some(FormState::ProviderAdd(form)) = app.form.as_mut() {
         form.focus = FormFocus::JsonPreview;
     }
     let compact_preview = all_text(&render_with_size(&app, &data, 80, 35));
     assert!(!compact_preview.contains("┌ Fields "), "{compact_preview}");
-    assert!(compact_preview.contains("┌ JSON "), "{compact_preview}");
+    assert!(
+        compact_preview.contains("┌ Provider Config "),
+        "{compact_preview}"
+    );
 
     let wide = all_text(&render_with_size(&app, &data, 160, 40));
     assert!(wide.contains("┌ Fields "), "{wide}");
-    assert!(wide.contains("┌ JSON "), "{wide}");
+    assert!(wide.contains("┌ Provider Config "), "{wide}");
 }
 
 #[test]

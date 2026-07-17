@@ -531,7 +531,6 @@ impl ProviderAddFormState {
                     self.claude_base_url = defaults.claude_base_url;
                     self.claude_api_format = defaults.claude_api_format;
                     self.claude_model = defaults.claude_model;
-                    self.claude_reasoning_model = defaults.claude_reasoning_model;
                     self.claude_haiku_model = defaults.claude_haiku_model;
                     self.claude_sonnet_model = defaults.claude_sonnet_model;
                     self.claude_opus_model = defaults.claude_opus_model;
@@ -596,7 +595,6 @@ impl ProviderAddFormState {
                     self.claude_base_url.set("");
                     self.claude_api_format = ClaudeApiFormat::Anthropic;
                     self.claude_model.set("");
-                    self.claude_reasoning_model.set("");
                     self.claude_haiku_model.set("");
                     self.claude_sonnet_model.set("");
                     self.claude_opus_model.set("");
@@ -632,7 +630,6 @@ impl ProviderAddFormState {
                         .set("https://chatgpt.com/backend-api/codex");
                     self.claude_api_format = ClaudeApiFormat::OpenAiResponses;
                     self.claude_model.set("gpt-5.4");
-                    self.claude_reasoning_model.set("gpt-5.4");
                     self.claude_haiku_model.set("gpt-5.4-mini");
                     self.claude_sonnet_model.set("gpt-5.4");
                     self.claude_opus_model.set("gpt-5.4");

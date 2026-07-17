@@ -2963,6 +2963,243 @@ fn provider_update_overwrites_claude_live_for_current_provider() {
     );
 }
 
+#[tokio::test]
+#[serial]
+async fn provider_update_keeps_running_claude_takeover_and_refreshes_restore_backup() {
+    let temp_home = TempDir::new().expect("create temp home");
+    let _env = TestEnvGuard::isolated(temp_home.path());
+    std::fs::create_dir_all(crate::config::get_claude_config_dir())
+        .expect("create ~/.claude (initialized)");
+
+    let original = Provider::with_id(
+        "p1".to_string(),
+        "First".to_string(),
+        json!({
+            "env": {
+                "ANTHROPIC_AUTH_TOKEN": "token-old",
+                "ANTHROPIC_BASE_URL": "https://claude.old",
+                "ANTHROPIC_MODEL": "model-old"
+            },
+            "permissions": { "allow": ["Bash"] }
+        }),
+        None,
+    );
+    let mut config = MultiAppConfig::default();
+    config.ensure_app(&AppType::Claude);
+    {
+        let manager = config
+            .get_manager_mut(&AppType::Claude)
+            .expect("claude manager");
+        manager.current = "p1".to_string();
+        manager.providers.insert("p1".to_string(), original.clone());
+    }
+
+    write_json_file(&get_claude_settings_path(), &original.settings_config)
+        .expect("seed live settings");
+
+    let state = state_from_config(config);
+    state.save().expect("persist config snapshot to db");
+    state
+        .db
+        .set_current_provider(AppType::Claude.as_str(), "p1")
+        .expect("set db current provider");
+    state
+        .db
+        .set_app_proxy_preferred_port(AppType::Claude.as_str(), 0)
+        .expect("use an ephemeral proxy port");
+    state
+        .proxy_service
+        .set_takeover_for_app(AppType::Claude.as_str(), true)
+        .await
+        .expect("enable Claude takeover");
+
+    let updated = Provider::with_id(
+        "p1".to_string(),
+        "First Updated".to_string(),
+        json!({
+            "env": {
+                "ANTHROPIC_AUTH_TOKEN": "token-new",
+                "ANTHROPIC_BASE_URL": "https://claude.new",
+                "ANTHROPIC_MODEL": "model-new",
+                "ANTHROPIC_REASONING_MODEL": "legacy-reasoning"
+            },
+            "permissions": { "allow": ["Read"] }
+        }),
+        None,
+    );
+
+    ProviderService::update(&state, AppType::Claude, updated)
+        .expect("update current provider during takeover");
+
+    let backup = state
+        .db
+        .get_live_backup(AppType::Claude.as_str())
+        .await
+        .expect("read Claude live backup")
+        .expect("Claude live backup should exist");
+    let backup_value: Value =
+        serde_json::from_str(&backup.original_config).expect("parse Claude live backup");
+    assert_eq!(
+        backup_value
+            .pointer("/env/ANTHROPIC_AUTH_TOKEN")
+            .and_then(Value::as_str),
+        Some("token-new")
+    );
+    assert_eq!(
+        backup_value
+            .pointer("/env/ANTHROPIC_BASE_URL")
+            .and_then(Value::as_str),
+        Some("https://claude.new")
+    );
+    assert_eq!(
+        backup_value
+            .pointer("/permissions/allow/0")
+            .and_then(Value::as_str),
+        Some("Read")
+    );
+
+    let live: Value = read_json_file(&get_claude_settings_path()).expect("read taken-over live");
+    assert_eq!(
+        live.pointer("/env/ANTHROPIC_AUTH_TOKEN")
+            .and_then(Value::as_str),
+        Some("PROXY_MANAGED"),
+        "live credentials must remain proxy-managed"
+    );
+    assert!(
+        live.pointer("/env/ANTHROPIC_BASE_URL")
+            .and_then(Value::as_str)
+            .is_some_and(|url| url.starts_with("http://127.0.0.1:")),
+        "live base URL must remain on the local proxy"
+    );
+    assert!(live.pointer("/env/ANTHROPIC_MODEL").is_none());
+    assert!(live.pointer("/env/ANTHROPIC_REASONING_MODEL").is_none());
+    assert_eq!(
+        live.pointer("/permissions/allow/0").and_then(Value::as_str),
+        Some("Read"),
+        "non-routing provider settings should refresh while takeover stays active"
+    );
+
+    state
+        .proxy_service
+        .set_takeover_for_app(AppType::Claude.as_str(), false)
+        .await
+        .expect("disable Claude takeover");
+    let restored: Value =
+        read_json_file(&get_claude_settings_path()).expect("read restored Claude settings");
+    assert_eq!(
+        restored
+            .pointer("/env/ANTHROPIC_AUTH_TOKEN")
+            .and_then(Value::as_str),
+        Some("token-new")
+    );
+    assert_eq!(
+        restored
+            .pointer("/env/ANTHROPIC_BASE_URL")
+            .and_then(Value::as_str),
+        Some("https://claude.new")
+    );
+    assert_eq!(
+        restored
+            .pointer("/permissions/allow/0")
+            .and_then(Value::as_str),
+        Some("Read")
+    );
+}
+
+#[tokio::test]
+#[serial]
+async fn provider_update_uses_live_marker_as_takeover_ownership_when_proxy_is_stopped() {
+    let temp_home = TempDir::new().expect("create temp home");
+    let _env = TestEnvGuard::isolated(temp_home.path());
+    std::fs::create_dir_all(crate::config::get_claude_config_dir())
+        .expect("create ~/.claude (initialized)");
+
+    let original = Provider::with_id(
+        "p1".to_string(),
+        "First".to_string(),
+        json!({
+            "env": {
+                "ANTHROPIC_AUTH_TOKEN": "token-old",
+                "ANTHROPIC_BASE_URL": "https://claude.old"
+            }
+        }),
+        None,
+    );
+    let mut config = MultiAppConfig::default();
+    config.ensure_app(&AppType::Claude);
+    {
+        let manager = config
+            .get_manager_mut(&AppType::Claude)
+            .expect("claude manager");
+        manager.current = "p1".to_string();
+        manager.providers.insert("p1".to_string(), original);
+    }
+    let state = state_from_config(config);
+    state.save().expect("persist config snapshot to db");
+    state
+        .db
+        .set_current_provider(AppType::Claude.as_str(), "p1")
+        .expect("set db current provider");
+
+    let takeover_live = json!({
+        "env": {
+            "ANTHROPIC_AUTH_TOKEN": "PROXY_MANAGED",
+            "ANTHROPIC_BASE_URL": "http://127.0.0.1:15721"
+        },
+        "permissions": { "allow": ["Bash"] }
+    });
+    write_json_file(&get_claude_settings_path(), &takeover_live)
+        .expect("seed takeover-owned live settings");
+    assert!(!state.proxy_service.is_running().await);
+    assert!(state
+        .db
+        .get_live_backup(AppType::Claude.as_str())
+        .await
+        .expect("read initial backup")
+        .is_none());
+
+    let updated = Provider::with_id(
+        "p1".to_string(),
+        "First Updated".to_string(),
+        json!({
+            "env": {
+                "ANTHROPIC_AUTH_TOKEN": "token-new",
+                "ANTHROPIC_BASE_URL": "https://claude.new"
+            },
+            "permissions": { "allow": ["Read"] }
+        }),
+        None,
+    );
+    ProviderService::update(&state, AppType::Claude, updated)
+        .expect("update takeover-owned provider while proxy is stopped");
+
+    let live: Value = read_json_file(&get_claude_settings_path()).expect("read unchanged live");
+    assert_eq!(
+        live, takeover_live,
+        "a stopped proxy must not trigger a normal live write over takeover placeholders"
+    );
+    let backup = state
+        .db
+        .get_live_backup(AppType::Claude.as_str())
+        .await
+        .expect("read refreshed backup")
+        .expect("refreshed backup should exist");
+    let backup_value: Value =
+        serde_json::from_str(&backup.original_config).expect("parse refreshed backup");
+    assert_eq!(
+        backup_value
+            .pointer("/env/ANTHROPIC_AUTH_TOKEN")
+            .and_then(Value::as_str),
+        Some("token-new")
+    );
+    assert_eq!(
+        backup_value
+            .pointer("/env/ANTHROPIC_BASE_URL")
+            .and_then(Value::as_str),
+        Some("https://claude.new")
+    );
+}
+
 #[test]
 #[serial]
 fn provider_update_treats_settings_effective_current_as_current_for_live_write() {

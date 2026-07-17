@@ -3302,6 +3302,14 @@ pub mod texts {
         "JSON"
     }
 
+    pub fn tui_provider_config_title() -> &'static str {
+        if is_chinese() {
+            "供应商配置"
+        } else {
+            "Provider Config"
+        }
+    }
+
     pub fn tui_codex_auth_json_title() -> &'static str {
         if is_chinese() {
             "auth.json (JSON) *"
@@ -3350,14 +3358,6 @@ pub mod texts {
         }
     }
 
-    pub fn tui_claude_reasoning_model_label() -> &'static str {
-        if is_chinese() {
-            "推理模型 (Thinking)"
-        } else {
-            "Reasoning Model (Thinking)"
-        }
-    }
-
     pub fn tui_claude_default_haiku_model_label() -> &'static str {
         if is_chinese() {
             "默认 Haiku 模型"
@@ -3384,9 +3384,9 @@ pub mod texts {
 
     pub fn tui_claude_model_config_summary(configured_count: usize) -> String {
         if is_chinese() {
-            format!("已配置 {configured_count}/4")
+            format!("已配置 {configured_count}/3")
         } else {
-            format!("Configured {configured_count}/4")
+            format!("Configured {configured_count}/3")
         }
     }
 
@@ -3416,10 +3416,9 @@ pub mod texts {
 
     pub fn tui_claude_model_label_for_index(idx: usize) -> &'static str {
         match idx {
-            0 => tui_claude_reasoning_model_label(),
-            1 => tui_claude_default_haiku_model_label(),
-            2 => tui_claude_default_sonnet_model_label(),
-            3 => tui_claude_default_opus_model_label(),
+            0 => tui_claude_default_haiku_model_label(),
+            1 => tui_claude_default_sonnet_model_label(),
+            2 => tui_claude_default_opus_model_label(),
             _ => "",
         }
     }

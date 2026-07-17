@@ -148,6 +148,7 @@ struct PostCommitAction {
     common_config_snippet: Option<String>,
     previous_common_config_snippet: Option<String>,
     takeover_active: bool,
+    sync_proxy_live: bool,
     activate_provider: bool,
 }
 
@@ -160,7 +161,10 @@ struct PreparedPostCommitAction {
 #[derive(Clone)]
 enum PreparedPostCommitEffect {
     Live(PreparedLiveWrite),
-    ProxyLiveBackup(Value),
+    ProxyLiveBackup {
+        snapshot: Value,
+        previous_backup: Option<String>,
+    },
 }
 
 #[derive(Clone)]
@@ -771,6 +775,9 @@ impl ProviderService {
         action: PostCommitAction,
     ) -> Result<PreparedPostCommitAction, AppError> {
         let effect = if action.takeover_active {
+            let previous_backup =
+                futures::executor::block_on(state.db.get_live_backup(action.app_type.as_str()))?
+                    .map(|backup| backup.original_config);
             let backup_snapshot =
                 futures::executor::block_on(state.proxy_service.prepare_live_backup_from_provider(
                     action.app_type.as_str(),
@@ -778,7 +785,10 @@ impl ProviderService {
                     action.previous_provider.as_ref(),
                 ))
                 .map_err(AppError::Message)?;
-            PreparedPostCommitEffect::ProxyLiveBackup(backup_snapshot)
+            PreparedPostCommitEffect::ProxyLiveBackup {
+                snapshot: backup_snapshot,
+                previous_backup,
+            }
         } else {
             let apply_common_config = action
                 .provider
@@ -815,13 +825,63 @@ impl ProviderService {
                     )?;
                 }
             }
-            PreparedPostCommitEffect::ProxyLiveBackup(snapshot) => {
+            PreparedPostCommitEffect::ProxyLiveBackup {
+                snapshot,
+                previous_backup,
+            } => {
                 futures::executor::block_on(
                     state
                         .proxy_service
                         .save_live_backup_snapshot(prepared.action.app_type.as_str(), snapshot),
                 )
                 .map_err(AppError::Message)?;
+
+                let sync_result = if prepared.action.sync_proxy_live {
+                    match state.proxy_service.is_running_blocking() {
+                        Ok(true) => futures::executor::block_on(
+                            state
+                                .proxy_service
+                                .sync_claude_live_from_provider_while_proxy_active(
+                                    &prepared.action.provider,
+                                ),
+                        )
+                        .map_err(|error| {
+                            AppError::localized(
+                                "provider.update.proxy_live_sync_failed",
+                                format!("同步 Claude Live 配置失败: {error}"),
+                                format!("Failed to sync Claude live config: {error}"),
+                            )
+                        }),
+                        Ok(false) => Ok(()),
+                        Err(error) => Err(AppError::Message(error)),
+                    }
+                } else {
+                    Ok(())
+                };
+
+                if let Err(sync_error) = sync_result {
+                    let restore_result = match previous_backup {
+                        Some(previous_backup) => {
+                            futures::executor::block_on(state.db.save_live_backup(
+                                prepared.action.app_type.as_str(),
+                                previous_backup,
+                            ))
+                        }
+                        None => futures::executor::block_on(
+                            state
+                                .db
+                                .delete_live_backup(prepared.action.app_type.as_str()),
+                        ),
+                    };
+                    if let Err(restore_error) = restore_result {
+                        return Err(AppError::localized(
+                            "provider.update.proxy_backup_rollback_failed",
+                            format!("{sync_error}；恢复 Live 备份失败: {restore_error}"),
+                            format!("{sync_error}; failed to restore live backup: {restore_error}"),
+                        ));
+                    }
+                    return Err(sync_error);
+                }
             }
         }
 
@@ -1281,6 +1341,7 @@ impl ProviderService {
             common_config_snippet: config.common_config_snippets.get(app_type).cloned(),
             previous_common_config_snippet,
             takeover_active,
+            sync_proxy_live: false,
             activate_provider: false,
         }))
     }
@@ -1932,6 +1993,7 @@ impl ProviderService {
                     common_config_snippet,
                     previous_common_config_snippet: None,
                     takeover_active: false,
+                    sync_proxy_live: false,
                     activate_provider: false,
                 })
             } else {
@@ -1962,6 +2024,19 @@ impl ProviderService {
                 crate::settings::get_effective_current_provider(&state.db, &app_type)?,
                 state.db.get_current_provider(app_type.as_str())?,
             )
+        };
+        let takeover_active = if app_type.is_additive_mode() {
+            false
+        } else {
+            let has_live_backup =
+                futures::executor::block_on(state.db.get_live_backup(app_type.as_str()))
+                    .ok()
+                    .flatten()
+                    .is_some();
+            let live_taken_over = state
+                .proxy_service
+                .detect_takeover_in_live_config_for_app(&app_type);
+            has_live_backup || live_taken_over
         };
 
         Self::run_transaction(state, move |config| {
@@ -2075,11 +2150,12 @@ impl ProviderService {
                     backup,
                     // Codex current-provider saves rewrite live config from the stored snapshot,
                     // so managed MCP must be synced back after the write.
-                    sync_mcp: matches!(&app_type_clone, AppType::Codex),
+                    sync_mcp: matches!(&app_type_clone, AppType::Codex) && !takeover_active,
                     refresh_snapshot: false,
                     common_config_snippet,
                     previous_common_config_snippet: None,
-                    takeover_active: false,
+                    takeover_active,
+                    sync_proxy_live: takeover_active && matches!(&app_type_clone, AppType::Claude),
                     activate_provider: false,
                 })
             } else {
@@ -2661,6 +2737,7 @@ impl ProviderService {
                 common_config_snippet: config.common_config_snippets.get(app_type).cloned(),
                 previous_common_config_snippet: None,
                 takeover_active: false,
+                sync_proxy_live: false,
                 activate_provider: matches!(app_type, AppType::Hermes),
             });
         }
@@ -2699,6 +2776,7 @@ impl ProviderService {
             common_config_snippet: config.common_config_snippets.get(app_type).cloned(),
             previous_common_config_snippet,
             takeover_active: false,
+            sync_proxy_live: false,
             activate_provider: false,
         })
     }

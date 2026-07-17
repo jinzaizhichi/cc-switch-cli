@@ -161,13 +161,6 @@ fn populate_claude_form(form: &mut ProviderAddFormState, provider: &Provider) {
         if let Some(model) = env.get("ANTHROPIC_MODEL").and_then(|value| value.as_str()) {
             form.claude_model.set(model);
         }
-        if let Some(reasoning) = env
-            .get("ANTHROPIC_REASONING_MODEL")
-            .and_then(|value| value.as_str())
-        {
-            form.claude_reasoning_model.set(reasoning);
-        }
-
         let model = env.get("ANTHROPIC_MODEL").and_then(|value| value.as_str());
         let small_fast = env
             .get("ANTHROPIC_SMALL_FAST_MODEL")
@@ -187,7 +180,7 @@ fn populate_claude_form(form: &mut ProviderAddFormState, provider: &Provider) {
             .or(model)
             .or(small_fast)
         {
-            form.set_claude_model_from_config(2, sonnet);
+            form.set_claude_model_from_config(1, sonnet);
         }
         if let Some(opus) = env
             .get("ANTHROPIC_DEFAULT_OPUS_MODEL")
@@ -195,7 +188,7 @@ fn populate_claude_form(form: &mut ProviderAddFormState, provider: &Provider) {
             .or(model)
             .or(small_fast)
         {
-            form.set_claude_model_from_config(3, opus);
+            form.set_claude_model_from_config(2, opus);
         }
     }
 }

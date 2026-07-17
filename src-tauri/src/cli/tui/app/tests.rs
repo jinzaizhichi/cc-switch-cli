@@ -12501,10 +12501,10 @@ mod tests {
         app.on_key(key(KeyCode::Char('m')), &data);
         app.on_key(key(KeyCode::Char('1')), &data);
 
-        // The picker opens on the first role row (index 0 = reasoning model).
+        // The picker opens on the first role row (index 0 = Haiku).
         let model = match app.form.as_ref() {
             Some(super::super::form::FormState::ProviderAdd(form)) => {
-                form.claude_reasoning_model.value.clone()
+                form.claude_haiku_model.value.clone()
             }
             other => panic!("expected ProviderAdd form, got: {other:?}"),
         };
@@ -12995,9 +12995,9 @@ mod tests {
         app.on_key(key(KeyCode::Char('j')), &data());
         app.on_key(key(KeyCode::Char('k')), &data());
 
-        // Index 0 in the model-mapping picker is now the reasoning role.
+        // Index 0 in the model-mapping picker is the Haiku role.
         let model = match app.form.as_ref() {
-            Some(FormState::ProviderAdd(form)) => form.claude_reasoning_model.value.clone(),
+            Some(FormState::ProviderAdd(form)) => form.claude_haiku_model.value.clone(),
             other => panic!("expected ProviderAdd form, got: {other:?}"),
         };
         assert_eq!(model, "jk");
@@ -13020,7 +13020,7 @@ mod tests {
         form.claude_sonnet_model.set("model-sonnet");
         app.form = Some(FormState::ProviderAdd(form));
         app.overlay = Overlay::ClaudeModelPicker {
-            selected: 2,
+            selected: 1,
             column: ClaudeModelPickerColumn::Model,
             editing: false,
         };
@@ -13029,7 +13029,7 @@ mod tests {
         assert!(matches!(
             app.overlay,
             Overlay::ClaudeModelPicker {
-                selected: 2,
+                selected: 1,
                 column: ClaudeModelPickerColumn::OneM,
                 editing: false,
             }
@@ -13050,14 +13050,14 @@ mod tests {
             Some(FormState::ProviderAdd(form)) => form,
             _ => panic!("expected ProviderAdd form"),
         };
-        assert!(form.claude_model_one_m_enabled(2));
+        assert!(form.claude_model_one_m_enabled(1));
 
         app.on_key(key(KeyCode::Left), &data());
         app.on_key(key(KeyCode::Enter), &data());
         assert!(matches!(
             app.overlay,
             Overlay::ClaudeModelPicker {
-                selected: 2,
+                selected: 1,
                 column: ClaudeModelPickerColumn::Model,
                 editing: true,
             }
@@ -13073,7 +13073,7 @@ mod tests {
             super::super::form::ProviderAddFormState::new(AppType::Claude),
         ));
         app.overlay = Overlay::ClaudeModelPicker {
-            selected: 1,
+            selected: 0,
             column: ClaudeModelPickerColumn::Model,
             editing: false,
         };
@@ -13082,14 +13082,14 @@ mod tests {
         assert!(matches!(
             app.overlay,
             Overlay::ClaudeModelPicker {
-                selected: 1,
+                selected: 0,
                 column: ClaudeModelPickerColumn::Model,
                 ..
             }
         ));
 
         app.overlay = Overlay::ClaudeModelPicker {
-            selected: 2,
+            selected: 1,
             column: ClaudeModelPickerColumn::OneM,
             editing: false,
         };
@@ -13097,7 +13097,7 @@ mod tests {
         assert!(matches!(
             app.overlay,
             Overlay::ClaudeModelPicker {
-                selected: 1,
+                selected: 0,
                 column: ClaudeModelPickerColumn::Model,
                 editing: false,
             }
@@ -13110,10 +13110,10 @@ mod tests {
         app.route = Route::Providers;
         app.focus = Focus::Content;
         let mut form = super::super::form::ProviderAddFormState::new(AppType::Claude);
-        form.set_claude_model_from_config(2, "old-model[1M]");
+        form.set_claude_model_from_config(1, "old-model[1M]");
         app.form = Some(FormState::ProviderAdd(form));
         app.overlay = Overlay::ClaudeModelPicker {
-            selected: 2,
+            selected: 1,
             column: ClaudeModelPickerColumn::Model,
             editing: true,
         };
@@ -13125,15 +13125,15 @@ mod tests {
             _ => panic!("expected ProviderAdd form"),
         };
         assert_eq!(form.claude_sonnet_model.value, "old-modelx");
-        assert!(form.claude_model_one_m_enabled(2));
+        assert!(form.claude_model_one_m_enabled(1));
 
         let Some(FormState::ProviderAdd(form)) = app.form.as_mut() else {
             panic!("expected ProviderAdd form");
         };
-        assert!(form.toggle_claude_model_one_m(2));
+        assert!(form.toggle_claude_model_one_m(1));
         form.claude_sonnet_model.set("next-model [1m]  ");
         app.overlay = Overlay::ClaudeModelPicker {
-            selected: 2,
+            selected: 1,
             column: ClaudeModelPickerColumn::Model,
             editing: true,
         };
@@ -13144,7 +13144,7 @@ mod tests {
             _ => panic!("expected ProviderAdd form"),
         };
         assert_eq!(form.claude_sonnet_model.value, "next-model");
-        assert!(form.claude_model_one_m_enabled(2));
+        assert!(form.claude_model_one_m_enabled(1));
     }
 
     #[test]
@@ -15241,8 +15241,7 @@ mod tests {
         ));
         if let Some(FormState::ProviderAdd(form)) = app.form.as_mut() {
             form.claude_model.set("claude-sonnet-4-20250514");
-            form.claude_reasoning_model.set("claude-sonnet-4-20250514");
-            form.claude_haiku_model.set("");
+            form.claude_haiku_model.set("claude-sonnet-4-20250514");
             form.claude_sonnet_model.set("");
             form.claude_opus_model.set("");
         }
@@ -15943,11 +15942,7 @@ mod tests {
             _ => panic!("expected ProviderAdd form"),
         };
         assert_eq!(form.claude_model.value, "claude-sonnet-4-20250514");
-        assert_eq!(
-            form.claude_reasoning_model.value,
-            "claude-sonnet-4-20250514",
-        );
-        assert_eq!(form.claude_haiku_model.value, "");
+        assert_eq!(form.claude_haiku_model.value, "claude-sonnet-4-20250514");
         assert_eq!(form.claude_sonnet_model.value, "");
         assert_eq!(form.claude_opus_model.value, "");
     }
@@ -15979,10 +15974,6 @@ mod tests {
             _ => panic!("expected ProviderAdd form"),
         };
         assert_eq!(form.claude_model.value, "claude-sonnet-4-20250514");
-        assert_eq!(
-            form.claude_reasoning_model.value,
-            "claude-sonnet-4-20250514",
-        );
         assert_eq!(form.claude_haiku_model.value, "claude-sonnet-4-20250514");
         assert_eq!(form.claude_sonnet_model.value, "claude-sonnet-4-20250514");
         assert_eq!(form.claude_opus_model.value, "claude-sonnet-4-20250514");
@@ -16036,7 +16027,7 @@ mod tests {
             _ => panic!("expected ProviderAdd form"),
         };
         assert_eq!(form.claude_model.value, "claude-sonnet-4-20250514");
-        assert_eq!(form.claude_haiku_model.value, "");
+        assert_eq!(form.claude_haiku_model.value, "claude-sonnet-4-20250514");
         assert_eq!(form.claude_opus_model.value, "");
     }
 
@@ -16062,7 +16053,7 @@ mod tests {
             _ => panic!("expected ProviderAdd form"),
         };
         assert_eq!(form.claude_model.value, "claude-sonnet-4-20250514");
-        assert_eq!(form.claude_haiku_model.value, "");
+        assert_eq!(form.claude_haiku_model.value, "claude-sonnet-4-20250514");
         assert_eq!(form.claude_opus_model.value, "");
     }
 
@@ -16074,7 +16065,7 @@ mod tests {
         app.form = Some(FormState::ProviderAdd(
             super::super::form::ProviderAddFormState::new(AppType::Claude),
         ));
-        // All fields are empty by default; selected=0 (Main Model) is empty
+        // All role fields are empty by default; selected=0 (Haiku) is empty.
         app.overlay = Overlay::ClaudeModelPicker {
             selected: 0,
             column: ClaudeModelPickerColumn::Model,
@@ -16106,20 +16097,20 @@ mod tests {
         if let Some(FormState::ProviderAdd(form)) = app.form.as_mut() {
             form.claude_opus_model.set("claude-opus-4-20250514");
         }
-        // Select the Opus role (now index 3 of the four role rows)
+        // Select the Opus role (index 2 of the three role rows).
         app.overlay = Overlay::ClaudeModelPicker {
-            selected: 3,
+            selected: 2,
             column: ClaudeModelPickerColumn::Model,
             editing: false,
         };
 
         app.on_key(key(KeyCode::Char('a')), &data());
 
-        // Confirm should reference source_idx=3
+        // Confirm should reference source_idx=2.
         assert!(matches!(
             &app.overlay,
             Overlay::Confirm(ConfirmOverlay {
-                action: ConfirmAction::ClaudeModelFillAll { source_idx: 3 },
+                action: ConfirmAction::ClaudeModelFillAll { source_idx: 2 },
                 ..
             })
         ));
@@ -16130,8 +16121,7 @@ mod tests {
             Some(FormState::ProviderAdd(f)) => f,
             _ => panic!("expected ProviderAdd form"),
         };
-        // Fill-all only spans the four role models; the fallback model is separate.
-        assert_eq!(form.claude_reasoning_model.value, "claude-opus-4-20250514");
+        // Fill-all only spans the three role models; the fallback model is separate.
         assert_eq!(form.claude_haiku_model.value, "claude-opus-4-20250514");
         assert_eq!(form.claude_sonnet_model.value, "claude-opus-4-20250514");
         assert_eq!(form.claude_opus_model.value, "claude-opus-4-20250514");
@@ -16144,10 +16134,10 @@ mod tests {
         app.route = Route::Providers;
         app.focus = Focus::Content;
         let mut form = super::super::form::ProviderAddFormState::new(AppType::Claude);
-        form.set_claude_model_from_config(2, "shared-model[1M]");
+        form.set_claude_model_from_config(1, "shared-model[1M]");
         app.form = Some(FormState::ProviderAdd(form));
         app.overlay = Overlay::ClaudeModelPicker {
-            selected: 2,
+            selected: 1,
             column: ClaudeModelPickerColumn::Model,
             editing: false,
         };
@@ -16159,12 +16149,10 @@ mod tests {
             Some(FormState::ProviderAdd(form)) => form,
             _ => panic!("expected ProviderAdd form"),
         };
-        assert_eq!(form.claude_reasoning_model.value, "shared-model");
         assert_eq!(form.claude_haiku_model.value, "shared-model");
         assert!(!form.claude_model_one_m_enabled(0));
-        assert!(!form.claude_model_one_m_enabled(1));
+        assert!(form.claude_model_one_m_enabled(1));
         assert!(form.claude_model_one_m_enabled(2));
-        assert!(form.claude_model_one_m_enabled(3));
     }
 
     // ------------------------------------------------------------------
@@ -16180,7 +16168,7 @@ mod tests {
         app.overlay = Overlay::ModelFetchPicker {
             request_id: 1,
             field: ProviderAddField::ClaudeModelConfig,
-            claude_idx: Some(1),
+            claude_idx: Some(0),
             input: TextInput::new("claude-haiku-4-20250514"),
             query: String::new(),
             fetching: false,
@@ -16195,12 +16183,11 @@ mod tests {
         let action = app.on_key(key(KeyCode::Enter), &data());
         assert!(matches!(action, Action::None));
 
-        // Should restore to ClaudeModelPicker with the correct selected index
-        // (index 1 is the Haiku role in the four-role mapping).
+        // Should restore to ClaudeModelPicker with the Haiku row selected.
         assert!(matches!(
             app.overlay,
             Overlay::ClaudeModelPicker {
-                selected: 1,
+                selected: 0,
                 column: ClaudeModelPickerColumn::Model,
                 editing: false
             }
@@ -16218,12 +16205,12 @@ mod tests {
     fn model_fetch_picker_claude_preserves_or_enables_one_m() {
         let mut app = App::new(Some(AppType::Claude));
         let mut form = super::super::form::ProviderAddFormState::new(AppType::Claude);
-        form.set_claude_model_from_config(2, "old-sonnet[1M]");
+        form.set_claude_model_from_config(1, "old-sonnet[1M]");
         app.form = Some(FormState::ProviderAdd(form));
         app.overlay = Overlay::ModelFetchPicker {
             request_id: 1,
             field: ProviderAddField::ClaudeModelConfig,
-            claude_idx: Some(2),
+            claude_idx: Some(1),
             input: TextInput::new("new-sonnet"),
             query: String::new(),
             fetching: false,
@@ -16241,12 +16228,12 @@ mod tests {
             _ => panic!("expected ProviderAdd form"),
         };
         assert_eq!(form.claude_sonnet_model.value, "new-sonnet");
-        assert!(form.claude_model_one_m_enabled(2));
+        assert!(form.claude_model_one_m_enabled(1));
 
         app.overlay = Overlay::ModelFetchPicker {
             request_id: 2,
             field: ProviderAddField::ClaudeModelConfig,
-            claude_idx: Some(3),
+            claude_idx: Some(2),
             input: TextInput::new("new-opus [1m]"),
             query: String::new(),
             fetching: false,
@@ -16264,11 +16251,11 @@ mod tests {
             _ => panic!("expected ProviderAdd form"),
         };
         assert_eq!(form.claude_opus_model.value, "new-opus");
-        assert!(form.claude_model_one_m_enabled(3));
+        assert!(form.claude_model_one_m_enabled(2));
         assert!(matches!(
             app.overlay,
             Overlay::ClaudeModelPicker {
-                selected: 3,
+                selected: 2,
                 column: ClaudeModelPickerColumn::Model,
                 editing: false,
             }
@@ -16284,7 +16271,7 @@ mod tests {
         app.overlay = Overlay::ModelFetchPicker {
             request_id: 1,
             field: ProviderAddField::ClaudeModelConfig,
-            claude_idx: Some(3),
+            claude_idx: Some(2),
             input: TextInput::new(""),
             query: String::new(),
             fetching: false,
@@ -16303,7 +16290,7 @@ mod tests {
         assert!(matches!(
             app.overlay,
             Overlay::ClaudeModelPicker {
-                selected: 3,
+                selected: 2,
                 column: ClaudeModelPickerColumn::Model,
                 editing: false
             }
@@ -16348,12 +16335,12 @@ mod tests {
             }
         ));
 
-        // Should have picked the first model from the list into index 0 (reasoning role)
+        // Should have picked the first model from the list into index 0 (Haiku role).
         let form = match app.form.as_ref() {
             Some(FormState::ProviderAdd(f)) => f,
             _ => panic!("expected ProviderAdd form"),
         };
-        assert_eq!(form.claude_reasoning_model.value, "model-a");
+        assert_eq!(form.claude_haiku_model.value, "model-a");
     }
 
     #[test]

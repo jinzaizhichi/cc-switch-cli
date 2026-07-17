@@ -665,7 +665,7 @@ impl App {
                 column,
                 editing,
             } => {
-                *selected = (*selected).min(3);
+                *selected = (*selected).min(2);
                 if !*editing {
                     return Action::None;
                 }
@@ -708,7 +708,7 @@ impl App {
                 column,
                 editing,
             } => {
-                *selected = (*selected).min(3);
+                *selected = (*selected).min(2);
                 if *editing {
                     return Action::None;
                 }
@@ -743,7 +743,7 @@ impl App {
                 Action::None
             }
             KeyCode::Down => {
-                let next = (selected + 1).min(3);
+                let next = (selected + 1).min(2);
                 if let Overlay::ClaudeModelPicker {
                     selected, column, ..
                 } = &mut self.overlay
