@@ -7,6 +7,36 @@ All notable changes to CC Switch CLI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.9.2] - 2026-07-18
+
+### Added
+
+- **Sync / S3**: Add S3-compatible cloud sync, including endpoint, region, bucket, credentials, path-style access, encrypted uploads, conflict checks, and TUI/CLI configuration. Implements [#267](https://github.com/SaladDay/cc-switch-cli/issues/267).
+- **TUI / External Editor**: Add an external-editor setting that lists editors already installed on the machine and lets the user choose one explicitly.
+- **Claude / Model Mapping**: Add dedicated 1M-context controls for Sonnet and Opus while keeping the existing `[1M]` storage format. Implements [#332](https://github.com/SaladDay/cc-switch-cli/issues/332).
+- **Sessions / Codex Titles**: Show renamed Codex thread titles in session history.
+
+### Changed
+
+- **Proxy / Failover**: Align provider commit, retry, and takeover behavior with upstream, and streamline the TUI queue workflow. Implements [#252](https://github.com/SaladDay/cc-switch-cli/issues/252).
+- **TUI / Interaction**: Use Enter consistently for form toggles and edits, simplify persistent key hints, group settings and configuration actions with compact dividers, and improve manual usage refresh feedback.
+
+### Fixed
+
+- **Codex / Session History**: Use the stable `custom` provider bucket for managed third-party providers, migrate legacy history and saved templates, and keep official unified-session routing live-only. Live writes, backfill, takeover backups, failover caches, restore paths, MCP projection, and upgrade recovery now follow upstream semantics without changing the database schema. Fixes [#353](https://github.com/SaladDay/cc-switch-cli/issues/353) and includes [#359](https://github.com/SaladDay/cc-switch-cli/pull/359).
+- **Proxy / Streaming**: Ignore an empty `reasoning_content` field exactly as upstream does, preventing DeepSeek-compatible streams from alternating thinking and text blocks for every token. Fixes [#336](https://github.com/SaladDay/cc-switch-cli/issues/336).
+- **Providers / Takeover Editing**: Update the active takeover backup when a provider is edited so the editor and live application configuration no longer diverge. Fixes [#357](https://github.com/SaladDay/cc-switch-cli/issues/357).
+- **MCP / Validation**: Reject duplicate server IDs during creation instead of silently replacing an existing entry.
+
+### Thanks
+
+Thanks to everyone who reported an issue, shared diagnostics, joined a design discussion, or submitted a PR during this release cycle:
+
+- Direct reports and requests: [@1753135250](https://github.com/1753135250) ([#252](https://github.com/SaladDay/cc-switch-cli/issues/252)), [@czyt](https://github.com/czyt) ([#267](https://github.com/SaladDay/cc-switch-cli/issues/267)), [@shaoyucheng](https://github.com/shaoyucheng) ([#332](https://github.com/SaladDay/cc-switch-cli/issues/332)), [@ChengguanYu](https://github.com/ChengguanYu) and [@EMinsight](https://github.com/EMinsight) ([#336](https://github.com/SaladDay/cc-switch-cli/issues/336)), [@palering](https://github.com/palering) ([#353](https://github.com/SaladDay/cc-switch-cli/issues/353)), and [@KortanZ](https://github.com/KortanZ) ([#357](https://github.com/SaladDay/cc-switch-cli/issues/357)).
+- PRs and proposals: [@fjh1997](https://github.com/fjh1997) ([#359](https://github.com/SaladDay/cc-switch-cli/pull/359)), [@mydelren](https://github.com/mydelren) ([#339](https://github.com/SaladDay/cc-switch-cli/pull/339)), [@lao-der](https://github.com/lao-der) ([#341](https://github.com/SaladDay/cc-switch-cli/pull/341)), [@coder-movers](https://github.com/coder-movers) ([#348](https://github.com/SaladDay/cc-switch-cli/pull/348)), and [@binyangzhu000-sudo](https://github.com/binyangzhu000-sudo) ([#354](https://github.com/SaladDay/cc-switch-cli/pull/354)).
+- Community questions and workflow feedback: [@Noodle05](https://github.com/Noodle05) ([#253](https://github.com/SaladDay/cc-switch-cli/issues/253)), [@mattmok](https://github.com/mattmok) ([#331](https://github.com/SaladDay/cc-switch-cli/issues/331)), [@lsg328](https://github.com/lsg328) ([#352](https://github.com/SaladDay/cc-switch-cli/issues/352)), [@quinnxiao](https://github.com/quinnxiao) ([#355](https://github.com/SaladDay/cc-switch-cli/issues/355)), [@potoo0](https://github.com/potoo0) ([#356](https://github.com/SaladDay/cc-switch-cli/issues/356)), and [@dividduang](https://github.com/dividduang) ([#358](https://github.com/SaladDay/cc-switch-cli/issues/358)).
+- Upstream credit: [@farion1231](https://github.com/farion1231) and the upstream contributors whose work was adapted here, especially [@AdJIa](https://github.com/AdJIa) for the original [streaming fix](https://github.com/farion1231/cc-switch/pull/4869) and [@keithyt06](https://github.com/keithyt06) for the S3 sync foundation.
+
 ## [5.9.1] - 2026-07-15
 
 ### Added
