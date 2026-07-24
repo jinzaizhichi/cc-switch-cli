@@ -1042,6 +1042,12 @@ pub fn preserve_codex_official_auth_on_switch() -> bool {
         .preserve_codex_official_auth_on_switch
 }
 
+pub fn set_preserve_codex_official_auth_on_switch(enabled: bool) -> Result<(), AppError> {
+    mutate_settings(|settings| {
+        settings.preserve_codex_official_auth_on_switch = enabled;
+    })
+}
+
 pub fn unify_codex_session_history() -> bool {
     settings_store()
         .read()

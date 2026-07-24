@@ -23,6 +23,7 @@ fn settings_section(item: SettingsItem) -> SettingsSection {
         | SettingsItem::OpenClawConfigDir => SettingsSection::Applications,
         SettingsItem::SkipClaudeOnboarding
         | SettingsItem::ClaudePluginIntegration
+        | SettingsItem::PreserveCodexOfficialAuth
         | SettingsItem::CodexUnifiedSessionHistory => SettingsSection::Integrations,
         SettingsItem::Proxy | SettingsItem::CheckForUpdates => SettingsSection::System,
     }
@@ -3432,6 +3433,7 @@ pub(super) fn render_settings(
     let openclaw_config_dir = crate::settings::get_settings().openclaw_config_dir;
     let skip_claude_onboarding = crate::settings::get_skip_claude_onboarding();
     let claude_plugin_integration = crate::settings::get_enable_claude_plugin_integration();
+    let preserve_codex_official_auth = crate::settings::preserve_codex_official_auth_on_switch();
     let codex_unified_session_history = crate::settings::unify_codex_session_history();
     let preferred_editor = crate::settings::get_preferred_editor();
 
@@ -3498,6 +3500,14 @@ pub(super) fn render_settings(
             super::app::SettingsItem::ClaudePluginIntegration => (
                 texts::enable_claude_plugin_integration_label().to_string(),
                 if claude_plugin_integration {
+                    texts::enabled().to_string()
+                } else {
+                    texts::disabled().to_string()
+                },
+            ),
+            super::app::SettingsItem::PreserveCodexOfficialAuth => (
+                texts::codex_preserve_official_auth_label().to_string(),
+                if preserve_codex_official_auth {
                     texts::enabled().to_string()
                 } else {
                     texts::disabled().to_string()

@@ -8245,6 +8245,28 @@ pub mod texts {
         }
     }
 
+    pub fn tui_toast_codex_official_auth_preservation_toggled(enabled: bool) -> String {
+        if is_chinese() {
+            if enabled {
+                "已启用 Codex 官方登录保护。".to_string()
+            } else {
+                "已关闭 Codex 官方登录保护。".to_string()
+            }
+        } else if enabled {
+            "Codex official login preservation enabled.".to_string()
+        } else {
+            "Codex official login preservation disabled.".to_string()
+        }
+    }
+
+    pub fn tui_codex_provider_switched_restart_notice() -> &'static str {
+        if is_chinese() {
+            "Codex 供应商已切换。请重启 Codex；SSH 远程项目请重新连接。"
+        } else {
+            "Codex provider switched. Restart Codex; reconnect SSH remote projects."
+        }
+    }
+
     pub fn tui_toast_codex_unified_session_history_toggled(enabled: bool) -> String {
         if is_chinese() {
             if enabled {
@@ -11780,6 +11802,14 @@ pub mod texts {
             "统一 Codex 会话历史"
         } else {
             "Unified Codex session history"
+        }
+    }
+
+    pub fn codex_preserve_official_auth_label() -> &'static str {
+        if is_chinese() {
+            "保留 Codex 官方登录"
+        } else {
+            "Preserve Codex official login"
         }
     }
 

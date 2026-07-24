@@ -4268,6 +4268,7 @@ fn settings_page_groups_items_with_unlabeled_dividers() {
     let visible_apps = line_index(&content, texts::tui_settings_visible_apps_mode_label());
     let openclaw_dir = line_index(&content, texts::tui_settings_openclaw_config_dir_label());
     let claude_integration = line_index(&content, texts::enable_claude_plugin_integration_label());
+    let codex_login = line_index(&content, texts::codex_preserve_official_auth_label());
     let codex_history = line_index(&content, texts::codex_unified_session_history_label());
     let proxy = line_index(&content, texts::tui_config_item_proxy());
 
@@ -4281,7 +4282,10 @@ fn settings_page_groups_items_with_unlabeled_dividers() {
         "{content}"
     );
     assert!(
-        dividers[1] < claude_integration && codex_history < dividers[2],
+        dividers[1] < claude_integration
+            && claude_integration < codex_login
+            && codex_login < codex_history
+            && codex_history < dividers[2],
         "{content}"
     );
     assert!(dividers[2] < proxy, "{content}");

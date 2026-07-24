@@ -933,6 +933,9 @@ pub(crate) fn handle_action(
             );
             Ok(())
         }
+        Action::SetPreserveCodexOfficialAuth { enabled } => {
+            settings::set_preserve_codex_official_auth(&mut ctx, enabled)
+        }
         Action::SetCodexUnifiedSessionHistory { enabled } => {
             settings::set_codex_unified_session_history(&mut ctx, enabled)
         }

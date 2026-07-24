@@ -9718,6 +9718,38 @@ mod tests {
     }
 
     #[test]
+    fn settings_menu_places_codex_login_preservation_before_session_history() {
+        let preserve_index = SettingsItem::ALL
+            .iter()
+            .position(|item| matches!(item, SettingsItem::PreserveCodexOfficialAuth))
+            .expect("PreserveCodexOfficialAuth missing from SettingsItem::ALL");
+        assert!(matches!(
+            SettingsItem::ALL.get(preserve_index + 1),
+            Some(SettingsItem::CodexUnifiedSessionHistory)
+        ));
+    }
+
+    #[test]
+    fn settings_codex_login_preservation_has_remote_context_help() {
+        let _lang = use_test_language(Language::English);
+        let mut app = App::new(Some(AppType::Codex));
+        app.route = Route::Settings;
+        app.focus = Focus::Content;
+        app.settings_idx = SettingsItem::ALL
+            .iter()
+            .position(|item| matches!(item, SettingsItem::PreserveCodexOfficialAuth))
+            .expect("PreserveCodexOfficialAuth missing from SettingsItem::ALL");
+
+        let help = crate::cli::tui::help::context_help_for_app(&app, &UiData::default());
+        let body = help.lines.join("\n");
+
+        assert_eq!(help.title, "Preserve Codex official login");
+        assert!(body.contains("remote user's CODEX_HOME"), "{body}");
+        assert!(body.contains("reconnect the remote project"), "{body}");
+        assert!(body.contains("does not sign you in"), "{body}");
+    }
+
+    #[test]
     fn settings_menu_places_preferred_editor_after_icons() {
         let editor_index = SettingsItem::ALL
             .iter()
@@ -10183,6 +10215,37 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    #[serial(home_settings)]
+    fn settings_codex_login_preservation_toggles_directly_without_overlay() {
+        let temp_home = TempDir::new().expect("create temp home");
+        let _env = TestEnvGuard::isolated(temp_home.path());
+
+        let mut app = App::new(Some(AppType::Codex));
+        app.route = Route::Settings;
+        app.focus = Focus::Content;
+        app.settings_idx = SettingsItem::ALL
+            .iter()
+            .position(|item| matches!(item, SettingsItem::PreserveCodexOfficialAuth))
+            .expect("PreserveCodexOfficialAuth missing from SettingsItem::ALL");
+
+        let enable = app.on_key(key(KeyCode::Enter), &UiData::default());
+        assert!(matches!(
+            enable,
+            Action::SetPreserveCodexOfficialAuth { enabled: true }
+        ));
+        assert!(matches!(app.overlay, Overlay::None));
+
+        crate::settings::set_preserve_codex_official_auth_on_switch(true)
+            .expect("seed enabled login preservation");
+        let disable = app.on_key(key(KeyCode::Enter), &UiData::default());
+        assert!(matches!(
+            disable,
+            Action::SetPreserveCodexOfficialAuth { enabled: false }
+        ));
+        assert!(matches!(app.overlay, Overlay::None));
     }
 
     #[test]

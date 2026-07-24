@@ -174,6 +174,7 @@ fn show_settings(json_output: bool) -> Result<(), AppError> {
             "visibleAppsMode": settings.visible_apps_settings.mode,
             "skipClaudeOnboarding": settings.skip_claude_onboarding,
             "enableClaudePluginIntegration": settings.enable_claude_plugin_integration,
+            "preserveCodexOfficialAuthOnSwitch": settings.preserve_codex_official_auth_on_switch,
             "unifyCodexSessionHistory": settings.unify_codex_session_history,
             "unifyCodexMigrateExisting": settings.unify_codex_migrate_existing.unwrap_or(false),
             "hasCodexHistoryUnifyBackup": crate::codex_history_migration::has_codex_official_history_unify_backup(),
@@ -197,6 +198,10 @@ fn show_settings(json_output: bool) -> Result<(), AppError> {
     println!(
         "Claude plugin integration: {}",
         yes_no(settings.enable_claude_plugin_integration)
+    );
+    println!(
+        "Preserve Codex official login: {}",
+        yes_no(settings.preserve_codex_official_auth_on_switch)
     );
     println!(
         "Unified Codex session history: {}",

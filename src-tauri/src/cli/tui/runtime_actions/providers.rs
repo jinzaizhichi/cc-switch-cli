@@ -154,10 +154,19 @@ fn do_switch(
         .proxy
         .routes_current_app_through_proxy(&ctx.app.app_type)
         .unwrap_or(false);
-    let proxy_overlay = switched_provider.as_ref().and_then(|provider| {
+    let mut proxy_overlay = switched_provider.as_ref().and_then(|provider| {
         provider_switch_proxy_notice_overlay(&ctx.app.app_type, provider, proxy_ready)
     });
+    let restart_notice_in_overlay =
+        append_codex_restart_notice_to_proxy_overlay(&ctx.app.app_type, &mut proxy_overlay);
     ctx.app.overlay = proxy_overlay.unwrap_or(Overlay::None);
+
+    if matches!(ctx.app.app_type, crate::app_config::AppType::Codex) && !restart_notice_in_overlay {
+        ctx.app.push_toast(
+            texts::tui_codex_provider_switched_restart_notice(),
+            ToastKind::Success,
+        );
+    }
 
     if ctx.app.app_type.is_additive_mode() {
         ctx.app.push_toast(
@@ -167,6 +176,24 @@ fn do_switch(
     }
 
     Ok(())
+}
+
+fn append_codex_restart_notice_to_proxy_overlay(
+    app_type: &crate::app_config::AppType,
+    overlay: &mut Option<Overlay>,
+) -> bool {
+    if !matches!(app_type, crate::app_config::AppType::Codex) {
+        return false;
+    }
+
+    let Some(Overlay::Confirm(confirm)) = overlay else {
+        return false;
+    };
+    confirm.message.push_str("\n\n");
+    confirm
+        .message
+        .push_str(texts::tui_codex_provider_switched_restart_notice());
+    true
 }
 
 fn provider_switch_proxy_notice_overlay(
@@ -1338,7 +1365,7 @@ mod tests {
 
     #[test]
     #[serial(home_settings)]
-    fn provider_switch_does_not_show_restart_toast_when_live_sync_succeeds() {
+    fn codex_provider_switch_shows_restart_toast_when_live_sync_succeeds() {
         let fixture = run_codex_switch(
             "old-provider",
             Some(MATCHING_CODEX_LIVE_CONFIG),
@@ -1347,22 +1374,26 @@ mod tests {
         .expect("switch should succeed");
 
         assert_eq!(fixture.data.providers.current_id, "new-provider");
-        assert!(
-            fixture.app.toast.is_none(),
-            "provider switch should not show restart toast"
-        );
+        assert!(matches!(
+            fixture.app.toast.as_ref(),
+            Some(toast)
+                if toast.kind == ToastKind::Success
+                    && toast.message == texts::tui_codex_provider_switched_restart_notice()
+        ));
     }
 
     #[test]
     #[serial(home_settings)]
-    fn provider_switch_does_not_show_restart_toast_when_live_sync_is_skipped() {
+    fn codex_provider_switch_shows_restart_toast_when_live_sync_is_skipped() {
         let fixture = run_codex_switch("old-provider", None, None).expect("switch should succeed");
 
         assert_eq!(fixture.data.providers.current_id, "new-provider");
-        assert!(
-            fixture.app.toast.is_none(),
-            "provider switch should not show restart toast"
-        );
+        assert!(matches!(
+            fixture.app.toast.as_ref(),
+            Some(toast)
+                if toast.kind == ToastKind::Success
+                    && toast.message == texts::tui_codex_provider_switched_restart_notice()
+        ));
     }
 
     #[test]
@@ -1857,6 +1888,47 @@ mod tests {
                 &app_type, &provider, true
             ));
         }
+    }
+
+    #[test]
+    fn codex_restart_notice_is_appended_to_existing_proxy_notice() {
+        let original_message = "Full URL mode requires the local proxy.";
+        let mut overlay = Some(Overlay::Confirm(ConfirmOverlay {
+            title: "Proxy required".to_string(),
+            message: original_message.to_string(),
+            action: ConfirmAction::ProviderApiFormatProxyNotice,
+        }));
+
+        assert!(append_codex_restart_notice_to_proxy_overlay(
+            &AppType::Codex,
+            &mut overlay
+        ));
+        assert!(matches!(
+            overlay,
+            Some(Overlay::Confirm(ConfirmOverlay { message, .. }))
+                if message == format!(
+                    "{original_message}\n\n{}",
+                    texts::tui_codex_provider_switched_restart_notice()
+                )
+        ));
+    }
+
+    #[test]
+    fn non_codex_proxy_notice_is_left_unchanged() {
+        let mut overlay = Some(Overlay::Confirm(ConfirmOverlay {
+            title: "Proxy required".to_string(),
+            message: "Original".to_string(),
+            action: ConfirmAction::ProviderApiFormatProxyNotice,
+        }));
+
+        assert!(!append_codex_restart_notice_to_proxy_overlay(
+            &AppType::Claude,
+            &mut overlay
+        ));
+        assert!(matches!(
+            overlay,
+            Some(Overlay::Confirm(ConfirmOverlay { message, .. })) if message == "Original"
+        ));
     }
 
     #[test]

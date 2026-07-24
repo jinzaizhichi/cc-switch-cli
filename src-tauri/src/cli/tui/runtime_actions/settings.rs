@@ -220,6 +220,18 @@ pub(super) fn set_preferred_editor(
     Ok(())
 }
 
+pub(super) fn set_preserve_codex_official_auth(
+    ctx: &mut RuntimeActionContext<'_>,
+    enabled: bool,
+) -> Result<(), AppError> {
+    crate::settings::set_preserve_codex_official_auth_on_switch(enabled)?;
+    ctx.app.push_toast(
+        texts::tui_toast_codex_official_auth_preservation_toggled(enabled),
+        ToastKind::Success,
+    );
+    Ok(())
+}
+
 pub(super) fn set_codex_unified_session_history(
     ctx: &mut RuntimeActionContext<'_>,
     enabled: bool,
@@ -719,6 +731,48 @@ mod tests {
             ctx.data.config.openclaw_config_path.as_ref(),
             Some(&temp_home.path().join(".openclaw").join("openclaw.json"))
         );
+    }
+
+    #[test]
+    fn set_codex_official_auth_preservation_persists_setting() {
+        let temp_home = TempDir::new().expect("create temp home");
+        let _env = TestEnvGuard::isolated(temp_home.path());
+
+        let mut terminal = TuiTerminal::new_for_test().expect("create test terminal");
+        let mut app = App::new(Some(AppType::Codex));
+        let mut data = UiData::load(&AppType::Codex).expect("load ui data");
+        let mut proxy_loading = RequestTracker::default();
+        let mut webdav_loading = RequestTracker::default();
+        let mut update_check = RequestTracker::default();
+        let mut ctx = RuntimeActionContext {
+            terminal: &mut terminal,
+            app: &mut app,
+            data: &mut data,
+            speedtest_req_tx: None,
+            stream_check_req_tx: None,
+            skills_req_tx: None,
+            proxy_req_tx: None,
+            proxy_loading: &mut proxy_loading,
+            local_env_req_tx: None,
+            session_req_tx: None,
+            webdav_req_tx: None,
+            webdav_loading: &mut webdav_loading,
+            update_req_tx: None,
+            update_check: &mut update_check,
+            model_fetch_req_tx: None,
+            managed_auth_req_tx: None,
+        };
+
+        set_preserve_codex_official_auth(&mut ctx, true)
+            .expect("enable Codex official auth preservation");
+
+        assert!(crate::settings::preserve_codex_official_auth_on_switch());
+        assert!(matches!(
+            ctx.app.toast.as_ref(),
+            Some(toast) if toast.kind == ToastKind::Success
+                && toast.message
+                    == texts::tui_toast_codex_official_auth_preservation_toggled(true)
+        ));
     }
 
     #[test]

@@ -52,6 +52,7 @@ enum HelpTarget {
     Sessions,
     FailoverQueue,
     PreferredEditor,
+    CodexOfficialAuthPreservation,
     ProviderTemplate,
     ProviderField {
         app_type: AppType,
@@ -131,14 +132,14 @@ fn current_help_target(app: &App) -> HelpTarget {
         return HelpTarget::Sessions;
     }
 
-    if matches!(app.route, super::route::Route::Settings)
-        && matches!(app.focus, Focus::Content)
-        && matches!(
-            SettingsItem::ALL.get(app.settings_idx),
-            Some(SettingsItem::PreferredEditor)
-        )
-    {
-        return HelpTarget::PreferredEditor;
+    if matches!(app.route, super::route::Route::Settings) && matches!(app.focus, Focus::Content) {
+        match SettingsItem::ALL.get(app.settings_idx) {
+            Some(SettingsItem::PreferredEditor) => return HelpTarget::PreferredEditor,
+            Some(SettingsItem::PreserveCodexOfficialAuth) => {
+                return HelpTarget::CodexOfficialAuthPreservation;
+            }
+            _ => {}
+        }
     }
 
     if let Some(FormState::S3Sync(form)) = app.form.as_ref() {
@@ -286,6 +287,13 @@ fn help_for_target(target: HelpTarget, app: &App, data: &UiData) -> HelpContent 
             help_lines(
                 "打开设置项时，cc-switch 才会检测当前系统中可执行的常见编辑器；检测不会启动任何程序，也不影响启动速度。检测结果只作为候选，必须按 Enter 明确选择后才会保存，不会自动替你选择。有效的 VISUAL 和 EDITOR 命令也会出现在候选中。\n自定义命令会按参数直接执行，不经过 shell，临时文件路径会追加为最后一个参数。带空格的路径或参数需要加引号；自定义输入留空可清除当前选择。\n图形编辑器必须使用等待参数（例如 code --wait），否则进程提前退出后临时文件会被回收。已配置的命令如果启动失败会直接报错，不会静默换用其他编辑器。",
                 "cc-switch detects executable common editors only when you open this setting; detection launches nothing and does not affect startup time. Results are choices only: nothing is saved until you explicitly press Enter, and no editor is selected automatically. Valid VISUAL and EDITOR commands also appear in the list.\nCustom commands are executed directly without a shell, with the temporary file path appended as the final argument. Quote paths or arguments that contain spaces; leave custom input empty to clear the selection.\nGUI editors need a wait flag, such as code --wait, or the temporary file could be removed when the launcher exits early. A configured command reports launch failures instead of silently switching editors.",
+            ),
+        ),
+        HelpTarget::CodexOfficialAuthPreservation => HelpContent::new(
+            texts::codex_preserve_official_auth_label(),
+            help_lines(
+                "开启后，切换到第三方 Codex 供应商或由本地代理接管时不会覆盖现有的官方 ChatGPT 登录；第三方密钥会写入 config.toml。此开关不会替你登录，也不会恢复此前被覆盖的凭据。\nCodex Desktop 的 SSH 项目读取远端用户的 CODEX_HOME、凭据和代理。请在远端 cc-switch-cli 开启本项；切换供应商后重新连接远程项目，使远端 app-server 重新加载配置和模型目录。",
+                "When enabled, switching to a third-party Codex provider or enabling local proxy takeover does not overwrite the existing ChatGPT login; the third-party key is written to config.toml. This setting does not sign you in or recover credentials that were already overwritten.\nCodex Desktop SSH projects use the remote user's CODEX_HOME, credentials, and proxy. Enable this setting in the remote cc-switch-cli, then reconnect the remote project after switching providers so its app-server reloads the config and model catalog.",
             ),
         ),
         HelpTarget::ProviderTemplate => HelpContent::new(
@@ -838,7 +846,7 @@ fn local_proxy_settings_field_help(field: LocalProxySettingsField) -> HelpConten
 }
 
 fn codex_model_catalog_field_help(field: CodexModelCatalogField) -> HelpContent {
-    match field {
+    let mut content = match field {
         CodexModelCatalogField::Model => HelpContent::new(
             tr("模型 ID", "Model ID"),
             help_lines(
@@ -860,7 +868,12 @@ fn codex_model_catalog_field_help(field: CodexModelCatalogField) -> HelpContent 
                 "Tells Codex this model's context window. Leave empty to avoid overriding it; filled values should match the provider's actual model capability.",
             ),
         ),
-    }
+    };
+    content.lines.extend(help_lines(
+        "模型目录只在 Codex/app-server 启动时加载。修改后请重启 Codex；Desktop SSH 项目请重新连接，目录来自远端同一用户的 CODEX_HOME。",
+        "The model catalog is loaded when Codex/app-server starts. Restart Codex after editing it; reconnect Desktop SSH projects because the catalog comes from the same remote user's CODEX_HOME.",
+    ));
+    content
 }
 
 fn provider_preview_help(app_type: AppType, section: Option<CodexPreviewSection>) -> HelpContent {

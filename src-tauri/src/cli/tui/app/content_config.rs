@@ -983,6 +983,10 @@ impl App {
                     });
                     Action::None
                 }
+                Some(SettingsItem::PreserveCodexOfficialAuth) => {
+                    let enabled = !crate::settings::preserve_codex_official_auth_on_switch();
+                    Action::SetPreserveCodexOfficialAuth { enabled }
+                }
                 Some(SettingsItem::CodexUnifiedSessionHistory) => {
                     let current = crate::settings::unify_codex_session_history();
                     let next = !current;

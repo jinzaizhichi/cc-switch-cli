@@ -285,6 +285,9 @@ pub enum Action {
     SetClaudePluginIntegration {
         enabled: bool,
     },
+    SetPreserveCodexOfficialAuth {
+        enabled: bool,
+    },
     SetCodexUnifiedSessionHistory {
         enabled: bool,
     },
@@ -489,13 +492,14 @@ pub enum SettingsItem {
     ManagedAccounts,
     SkipClaudeOnboarding,
     ClaudePluginIntegration,
+    PreserveCodexOfficialAuth,
     CodexUnifiedSessionHistory,
     Proxy,
     CheckForUpdates,
 }
 
 impl SettingsItem {
-    pub const ALL: [SettingsItem; 13] = [
+    pub const ALL: [SettingsItem; 14] = [
         SettingsItem::ManagedAccounts,
         SettingsItem::Language,
         SettingsItem::Theme,
@@ -506,6 +510,7 @@ impl SettingsItem {
         SettingsItem::OpenClawConfigDir,
         SettingsItem::SkipClaudeOnboarding,
         SettingsItem::ClaudePluginIntegration,
+        SettingsItem::PreserveCodexOfficialAuth,
         SettingsItem::CodexUnifiedSessionHistory,
         SettingsItem::Proxy,
         SettingsItem::CheckForUpdates,
